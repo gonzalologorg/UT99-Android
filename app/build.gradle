@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.ast.ut99'
+    compileSdk 33
+
+    defaultConfig {
+        applicationId 'com.ast.ut99'
+        minSdk 16          // Android 4.1.2 / OUYA
+        targetSdk 28       // keeps legacy storage behaviour friendlier for old sideload devices
+        versionCode 1
+        versionName '1.0'
+
+        ndk {
+            abiFilters 'armeabi-v7a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                abiFilters 'armeabi-v7a'
+                cppFlags '-std=c++17 -fexceptions -frtti -fsigned-char -DANDROID -DPLATFORM_ANDROID'
+                arguments '-DANDROID_STL=c++_shared',
+                        '-DANDROID_ARM_MODE=arm',
+                        '-DANDROID_ARM_NEON=FALSE'
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            // fetch_deps.ps1 downloads SDL2 under the project root. Use rootProject.file()
+            // so the path remains correct regardless of Gradle's current project directory.
+            java.srcDirs = [
+                    'src/main/java',
+                    rootProject.file('third_party/SDL2/android-project/app/src/main/java')
+            ]
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
+    lint {
+        // This APK is intended for sideload/testing. Keep targetSdk 28 for the
+        // current legacy storage/runtime behaviour and only silence the Play
+        // target-SDK lint gate for release assembly.
+        disable 'ExpiredTargetSdkVersion'
+    }
+}

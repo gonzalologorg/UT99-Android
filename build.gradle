@@ -1,0 +1,6 @@
+plugins {
+    // Android Studio 2022.2.1 can use AGP 7.4.x, but some installations still
+    // run the sync with Gradle 7.4. AGP 7.4.2 calls APIs that require Gradle 7.5+.
+    // AGP 7.3.1 is the safer compatibility target for this scaffold.
+    id 'com.android.application' version '7.3.1' apply false
+}
