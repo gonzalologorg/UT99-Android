@@ -1,4 +1,4 @@
-/* UT99_ANDROID_V65_VIDEO_PREF_LABELS_FONT_PERSIST */
+/* UT99_ANDROID_V74_TOUCH_NATIVE_SCALE_FIX */
 package com.ast.ut99;
 
 import android.content.pm.ActivityInfo;
@@ -22,10 +22,9 @@ import java.io.File;
 public class GameActivity extends SDLActivity {
     private static final String TAG = "UT99Android";
 
-    // UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS:
+    // UT99_ANDROID_V73_RESOLUTION_SCALE_RESTORED:
     // Preferences > Video > Resolution can request Native, 75% native Res. or 50% native Res.
-    // Java owns the Android SurfaceHolder buffer size because that is the only
-    // reliable way to reduce the real EGL drawable resolution on Android/SDL.
+    // Java owns the Android SurfaceHolder buffer size so the EGL drawable really becomes smaller.
     private static java.lang.ref.WeakReference<GameActivity> sUt99V64ActivityRef;
     private int ut99V64ResolutionScalePercent = 100;
 
@@ -33,6 +32,7 @@ public class GameActivity extends SDLActivity {
     // The SDL dummy text view must not summon the IME during engine start.
     // Native UWindow code toggles this flag only when an actual edit-field candidate is tapped.
     private static volatile boolean sUt99ImeWanted;
+    private static boolean sUt99V72LoggedActive = false;
 
     public static void ut99SetImeWanted(boolean wanted) {
         sUt99ImeWanted = wanted;
@@ -64,7 +64,7 @@ public class GameActivity extends SDLActivity {
     public static void ut99ApplyResolutionScaleV64(final int percent) {
         final GameActivity activity = sUt99V64ActivityRef != null ? sUt99V64ActivityRef.get() : null;
         if (activity == null) {
-            Log.w(TAG, "v64 resolution scale request ignored because GameActivity is not active percent=" + percent);
+            Log.w(TAG, "v73 resolution scale request ignored because GameActivity is not active percent=" + percent);
             return;
         }
 
@@ -183,6 +183,7 @@ public class GameActivity extends SDLActivity {
         ut99V52ScheduleImmersive(); // v52 onCreate
         // UT99_ANDROID_V63_CITYINTRO_START: do not cover CityIntro with the old static title/menu overlay.
         // ut99V52ShowStartupOverlay();
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V73_RESOLUTION_SCALE_RESTORED active percent=" + ut99V64ResolutionScalePercent);
         ut99V50StageBranding();
         ut99V50Immersive(); // v50 onCreate
         stageBrandingAssetV47();
@@ -626,6 +627,7 @@ public class GameActivity extends SDLActivity {
                 + " initial GUIScale=" + guiScale);
     }
 
+
     private void ut99V60UpsertGuiScale(java.io.File ini, String guiScale) {
         if (ini == null) return;
 
@@ -719,7 +721,7 @@ public class GameActivity extends SDLActivity {
         }
     }
 
-    // UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS
+    // UT99_ANDROID_V73_RESOLUTION_SCALE_RESTORED
     private static final String UT99_V64_SCALE_SECTION = "NSDLDrv.NSDLClient";
     private static final String UT99_V64_SCALE_KEY = "AndroidResolutionScale";
 
@@ -834,7 +836,7 @@ public class GameActivity extends SDLActivity {
 
         if (percent >= 100) {
             holder.setSizeFromLayout();
-            android.util.Log.i("UT99Android", "UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS SurfaceHolder Native layout size on " + sv.getClass().getName());
+            android.util.Log.i("UT99Android", "UT99_ANDROID_V73_RESOLUTION_SCALE_RESTORED SurfaceHolder Native layout size on " + sv.getClass().getName());
             return;
         }
 
@@ -853,7 +855,7 @@ public class GameActivity extends SDLActivity {
         scaledH = Math.max(240, scaledH & ~1);
 
         holder.setFixedSize(scaledW, scaledH);
-        android.util.Log.i("UT99Android", "UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS SurfaceHolder "
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V73_RESOLUTION_SCALE_RESTORED SurfaceHolder "
                 + percent + "% of native " + baseW + "x" + baseH + " -> " + scaledW + "x" + scaledH
                 + " on " + sv.getClass().getName());
     }
@@ -872,7 +874,7 @@ public class GameActivity extends SDLActivity {
         ut99V56SurfaceFixedOnce = false;
         ut99V55ApplyFixedSurface();
         ut99V55ScheduleFixedSurface();
-        android.util.Log.i("UT99Android", "UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS applied percent=" + ut99V64ResolutionScalePercent);
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V73_RESOLUTION_SCALE_RESTORED applied percent=" + ut99V64ResolutionScalePercent);
     }
 
     // UT99_ANDROID_IMMERSIVE_V44: keep the visible surface stable on Android handhelds.
@@ -994,10 +996,21 @@ public class GameActivity extends SDLActivity {
         final int keyCode = event.getKeyCode();
         boolean textDeleteKey = keyCode == android.view.KeyEvent.KEYCODE_DEL
                 || keyCode == android.view.KeyEvent.KEYCODE_FORWARD_DEL;
+        if (!sUt99V72LoggedActive) {
+            sUt99V72LoggedActive = true;
+            android.util.Log.i("UT99Android", "UT99_ANDROID_V72_ACTIVE GameActivity single START toggle path loaded");
+        }
         if (isAndroidGamepadSourceV47(event) || isOuyaMenuKeyV79(keyCode) || textDeleteKey) {
             if (action == android.view.KeyEvent.ACTION_DOWN || action == android.view.KeyEvent.ACTION_UP) {
+                if (action == android.view.KeyEvent.ACTION_DOWN && event.getRepeatCount() > 0
+                        && (keyCode == android.view.KeyEvent.KEYCODE_BUTTON_START
+                        || keyCode == android.view.KeyEvent.KEYCODE_MENU
+                        || keyCode == android.view.KeyEvent.KEYCODE_BUTTON_MODE)) {
+                    android.util.Log.i("UT99Android", "UT99_ANDROID_V72_KEY ignored repeated START/MENU key=" + keyCode);
+                    return true;
+                }
                 nativeAndroidButtonV47(keyCode, action == android.view.KeyEvent.ACTION_DOWN);
-                android.util.Log.i("UT99Android", "v80 android key code=" + keyCode + " down=" + (action == android.view.KeyEvent.ACTION_DOWN));
+                android.util.Log.i("UT99Android", "UT99_ANDROID_V72_KEY key=" + keyCode + " down=" + (action == android.view.KeyEvent.ACTION_DOWN));
                 return true;
             }
         }
@@ -1394,7 +1407,7 @@ public class GameActivity extends SDLActivity {
                 );
             }
 
-            // v60: SurfaceView occupies fullscreen and SurfaceHolder follows layout size.
+            // v73: SurfaceView occupies fullscreen; SurfaceHolder may use Native/75%/50% drawable size.
             // This lets SDL/EGL expose the real drawable size to Unreal.
             lp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
             lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
