@@ -1,4 +1,4 @@
-/* UT99_ANDROID_V55_FIXED_SURFACE_LOGICAL_960X540 */
+/* UT99_ANDROID_V65_VIDEO_PREF_LABELS_FONT_PERSIST */
 package com.ast.ut99;
 
 import android.content.pm.ActivityInfo;
@@ -21,6 +21,13 @@ import java.io.File;
  */
 public class GameActivity extends SDLActivity {
     private static final String TAG = "UT99Android";
+
+    // UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS:
+    // Preferences > Video > Resolution can request Native, 75% native Res. or 50% native Res.
+    // Java owns the Android SurfaceHolder buffer size because that is the only
+    // reliable way to reduce the real EGL drawable resolution on Android/SDL.
+    private static java.lang.ref.WeakReference<GameActivity> sUt99V64ActivityRef;
+    private int ut99V64ResolutionScalePercent = 100;
 
     // UT99_ANDROID_V76_KEYBOARD_START_SAFE:
     // The SDL dummy text view must not summon the IME during engine start.
@@ -52,6 +59,20 @@ public class GameActivity extends SDLActivity {
             Log.w(TAG, "v82 IME bridge unavailable, falling back to SDL text path", t);
             return false;
         }
+    }
+
+    public static void ut99ApplyResolutionScaleV64(final int percent) {
+        final GameActivity activity = sUt99V64ActivityRef != null ? sUt99V64ActivityRef.get() : null;
+        if (activity == null) {
+            Log.w(TAG, "v64 resolution scale request ignored because GameActivity is not active percent=" + percent);
+            return;
+        }
+
+        activity.runOnUiThread(new Runnable() {
+            @Override public void run() {
+                activity.ut99V64ApplyResolutionScalePercent(percent, true);
+            }
+        });
     }
 
     private static boolean bridgeLoaded;
@@ -89,9 +110,11 @@ public class GameActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        sUt99V64ActivityRef = new java.lang.ref.WeakReference<GameActivity>(this);
         dataRoot = resolveDataRootForGame();
         homeDir = UT99Paths.homeDir(this);
         legacySafeMode = resolveLegacySafeMode();
+        ut99V64ResolutionScalePercent = ut99V64ReadResolutionScalePercent();
 
         applyUt99ImmersiveMode();
         sUt99ImeWanted = false;
@@ -153,6 +176,8 @@ public class GameActivity extends SDLActivity {
         } else {
             android.util.Log.i("UT99Android", "UT99_ANDROID_V86_CONFIG_PRESERVE keeping existing AndroidUT99.ini/AndroidUser.ini");
         }
+        applyUt99V65InitialNativeFontScaleConfig(androidIniCreatedV86);
+        ut99V64EnsureResolutionScaleConfig();
         super.onCreate(savedInstanceState);
         ut99V55ScheduleFixedSurface(); // v55 onCreate
         ut99V52ScheduleImmersive(); // v52 onCreate
@@ -185,6 +210,13 @@ public class GameActivity extends SDLActivity {
     protected void onDestroy() {
         final boolean finishing = isFinishing();
         super.onDestroy();
+
+        try {
+            if (sUt99V64ActivityRef != null && sUt99V64ActivityRef.get() == this) {
+                sUt99V64ActivityRef.clear();
+            }
+        } catch (Throwable ignored) {
+        }
 
         // UT99_ANDROID_V87_RELIABLE_RELAUNCH:
         // The engine runs in its own :game process.  Some devices keep that
@@ -507,6 +539,340 @@ public class GameActivity extends SDLActivity {
         } catch (java.io.IOException ex) {
             android.util.Log.e("UT99Android", "v40 failed to append config to " + file.getAbsolutePath(), ex);
         }
+    }
+
+    // UT99_ANDROID_V60_NATIVE_SURFACE_AUTOSCALE:
+    // Keep the engine/UI in native display coordinates.  On panels taller than
+    // 540px we switch UWindow/UMenu to its built-in DOUBLE GUI scale (2.0),
+    // which is the same setting exposed by the in-game Preferences GUI Scale combo.
+    private static final int UT99_V60_DOUBLE_FONT_HEIGHT_THRESHOLD = 540;
+
+    private int[] ut99V60ResolveNativeDisplaySize() {
+        int bestW = 0;
+        int bestH = 0;
+
+        try {
+            android.view.View decor = getWindow() != null ? getWindow().getDecorView() : null;
+            if (decor != null && decor.getWidth() > 0 && decor.getHeight() > 0) {
+                bestW = decor.getWidth();
+                bestH = decor.getHeight();
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+            getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+            if (dm.widthPixels > 0 && dm.heightPixels > 0 && (dm.widthPixels * dm.heightPixels) > (bestW * bestH)) {
+                bestW = dm.widthPixels;
+                bestH = dm.heightPixels;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            if (dm != null && dm.widthPixels > 0 && dm.heightPixels > 0 && (dm.widthPixels * dm.heightPixels) > (bestW * bestH)) {
+                bestW = dm.widthPixels;
+                bestH = dm.heightPixels;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        return new int[] { bestW, bestH };
+    }
+
+    private void applyUt99V65InitialNativeFontScaleConfig(boolean androidIniCreated) {
+        // UT99_ANDROID_V65_VIDEO_PREF_LABELS_FONT_PERSIST:
+        // Auto-select DOUBLE font only on the very first generated config.  After
+        // that the in-game Preferences > Video > Font Size setting owns GUIScale
+        // and must not be overwritten by Java on every launch.
+        if (!androidIniCreated) {
+            android.util.Log.i("UT99Android", "UT99_ANDROID_V65_FONT_PERSIST preserving existing GUIScale settings");
+            return;
+        }
+
+        java.io.File root = getUt99ConfigRootV63();
+        if (root == null) {
+            android.util.Log.e("UT99Android", "v65 could not get config root for initial native font scale");
+            return;
+        }
+
+        int[] displaySize = ut99V60ResolveNativeDisplaySize();
+        int displayW = displaySize[0];
+        int displayH = displaySize[1];
+        int landscapeHeight = 0;
+        if (displayW > 0 && displayH > 0) {
+            landscapeHeight = Math.min(displayW, displayH);
+        } else if (displayH > 0) {
+            landscapeHeight = displayH;
+        }
+
+        String guiScale = landscapeHeight > UT99_V60_DOUBLE_FONT_HEIGHT_THRESHOLD ? "2.000000" : "1.000000";
+
+        java.io.File systemDir = new java.io.File(root, "System");
+        if (!systemDir.exists() && !systemDir.mkdirs()) {
+            android.util.Log.e("UT99Android", "v65 could not create System dir: " + systemDir.getAbsolutePath());
+            return;
+        }
+
+        java.io.File androidIni = new java.io.File(systemDir, "AndroidUT99.ini");
+        java.io.File userIni = new java.io.File(systemDir, "AndroidUser.ini");
+        ut99V60UpsertGuiScale(androidIni, guiScale);
+        ut99V60UpsertGuiScale(userIni, guiScale);
+
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V65_INITIAL_FONT_SCALE display="
+                + displayW + "x" + displayH + " landscapeHeight=" + landscapeHeight
+                + " initial GUIScale=" + guiScale);
+    }
+
+    private void ut99V60UpsertGuiScale(java.io.File ini, String guiScale) {
+        if (ini == null) return;
+
+        try {
+            String text = ini.exists() ? ut99V60ReadUtf8(ini) : "";
+            text = ut99V60UpsertKey(text, "UWindow.UWindowRootWindow", "GUIScale", guiScale);
+            text = ut99V60UpsertKey(text, "UMenu.UMenuRootWindow", "GUIScale", guiScale);
+            ut99V60WriteUtf8(ini, text);
+        } catch (Throwable t) {
+            android.util.Log.e("UT99Android", "v60 failed to upsert GUI scale in " + ini.getAbsolutePath(), t);
+        }
+    }
+
+    private String ut99V60UpsertKey(String text, String section, String key, String value) {
+        if (text == null) text = "";
+        String[] lines = text.split("\\r?\\n", -1);
+        StringBuilder out = new StringBuilder(text.length() + 128);
+        boolean inSection = false;
+        boolean sectionFound = false;
+        boolean keyWritten = false;
+        String sectionHeader = "[" + section + "]";
+        String keyPrefix = key + "=";
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String trimmed = line.trim();
+            boolean isHeader = trimmed.startsWith("[") && trimmed.endsWith("]");
+
+            if (isHeader) {
+                if (inSection && !keyWritten) {
+                    out.append(keyPrefix).append(value).append('\n');
+                    keyWritten = true;
+                }
+                inSection = trimmed.equalsIgnoreCase(sectionHeader);
+                if (inSection) {
+                    sectionFound = true;
+                    keyWritten = false;
+                }
+            } else if (inSection && trimmed.toLowerCase(java.util.Locale.US).startsWith(keyPrefix.toLowerCase(java.util.Locale.US))) {
+                if (!keyWritten) {
+                    out.append(keyPrefix).append(value).append('\n');
+                    keyWritten = true;
+                }
+                continue;
+            }
+
+            out.append(line);
+            if (i < lines.length - 1) {
+                out.append('\n');
+            }
+        }
+
+        if (inSection && !keyWritten) {
+            if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
+            out.append(keyPrefix).append(value).append('\n');
+        }
+
+        if (!sectionFound) {
+            if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') out.append('\n');
+            out.append('\n').append(sectionHeader).append('\n').append(keyPrefix).append(value).append('\n');
+        }
+
+        return out.toString();
+    }
+
+    private String ut99V60ReadUtf8(java.io.File file) throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        java.io.FileInputStream in = new java.io.FileInputStream(file);
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) >= 0) {
+                out.write(buf, 0, n);
+            }
+        } finally {
+            in.close();
+        }
+        return out.toString("UTF-8");
+    }
+
+    private void ut99V60WriteUtf8(java.io.File file, String text) throws java.io.IOException {
+        java.io.File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new java.io.IOException("Cannot create folder: " + parent.getAbsolutePath());
+        }
+        java.io.FileOutputStream out = new java.io.FileOutputStream(file, false);
+        try {
+            out.write(text.getBytes("UTF-8"));
+        } finally {
+            out.close();
+        }
+    }
+
+    // UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS
+    private static final String UT99_V64_SCALE_SECTION = "NSDLDrv.NSDLClient";
+    private static final String UT99_V64_SCALE_KEY = "AndroidResolutionScale";
+
+    private int ut99V64NormalizeScalePercent(int percent) {
+        if (percent <= 55) return 50;
+        if (percent <= 85) return 75;
+        return 100;
+    }
+
+    private int ut99V64ParseScalePercent(String raw, int fallback) {
+        if (raw == null) return fallback;
+        String value = raw.trim().toLowerCase(java.util.Locale.US);
+        if (value.length() == 0) return fallback;
+        if (value.contains("50")) return 50;
+        if (value.contains("75")) return 75;
+        if (value.contains("native") || value.contains("100") || value.equals("1") || value.equals("1.0") || value.equals("1.000000")) return 100;
+        try {
+            float f = Float.parseFloat(value);
+            if (f > 0.0f && f <= 1.0f) {
+                return ut99V64NormalizeScalePercent(Math.round(f * 100.0f));
+            }
+            return ut99V64NormalizeScalePercent(Math.round(f));
+        } catch (Throwable ignored) {
+        }
+        return fallback;
+    }
+
+    private int ut99V64ReadResolutionScalePercent() {
+        java.io.File root = getUt99ConfigRootV63();
+        if (root == null) return 100;
+        java.io.File systemDir = new java.io.File(root, "System");
+        java.io.File[] candidates = new java.io.File[] {
+                new java.io.File(systemDir, "AndroidUT99.ini"),
+                new java.io.File(systemDir, "AndroidUser.ini")
+        };
+
+        for (java.io.File ini : candidates) {
+            try {
+                if (ini == null || !ini.exists()) continue;
+                String text = ut99V60ReadUtf8(ini);
+                String[] lines = text.split("\\r?\\n", -1);
+                for (String line : lines) {
+                    String trimmed = line != null ? line.trim() : "";
+                    if (trimmed.toLowerCase(java.util.Locale.US).startsWith((UT99_V64_SCALE_KEY + "=").toLowerCase(java.util.Locale.US))) {
+                        return ut99V64ParseScalePercent(trimmed.substring(trimmed.indexOf('=') + 1), 100);
+                    }
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("UT99Android", "v64 could not read resolution scale from " + ini.getAbsolutePath(), t);
+            }
+        }
+        return 100;
+    }
+
+    private void ut99V64EnsureResolutionScaleConfig() {
+        java.io.File root = getUt99ConfigRootV63();
+        if (root == null) return;
+        java.io.File systemDir = new java.io.File(root, "System");
+        if (!systemDir.exists() && !systemDir.mkdirs()) {
+            android.util.Log.e("UT99Android", "v64 could not create System dir: " + systemDir.getAbsolutePath());
+            return;
+        }
+        java.io.File androidIni = new java.io.File(systemDir, "AndroidUT99.ini");
+        ut99V64WriteResolutionScaleConfig(androidIni, ut99V64ResolutionScalePercent, false);
+    }
+
+    private void ut99V64WriteResolutionScaleConfig(java.io.File ini, int percent, boolean overwrite) {
+        if (ini == null) return;
+        percent = ut99V64NormalizeScalePercent(percent);
+        try {
+            String text = ini.exists() ? ut99V60ReadUtf8(ini) : "";
+            boolean hasKey = text.toLowerCase(java.util.Locale.US).contains((UT99_V64_SCALE_KEY + "=").toLowerCase(java.util.Locale.US));
+            if (!hasKey || overwrite) {
+                text = ut99V60UpsertKey(text, UT99_V64_SCALE_SECTION, UT99_V64_SCALE_KEY, String.valueOf(percent));
+                ut99V60WriteUtf8(ini, text);
+            }
+        } catch (Throwable t) {
+            android.util.Log.e("UT99Android", "v64 failed to write resolution scale to " + ini.getAbsolutePath(), t);
+        }
+    }
+
+    private int[] ut99V64ResolveBaseSurfaceSize(android.view.SurfaceView sv) {
+        int baseW = 0;
+        int baseH = 0;
+        try {
+            if (sv != null && sv.getWidth() > 0 && sv.getHeight() > 0) {
+                baseW = sv.getWidth();
+                baseH = sv.getHeight();
+            }
+        } catch (Throwable ignored) {
+        }
+
+        if (baseW <= 0 || baseH <= 0) {
+            int[] displaySize = ut99V60ResolveNativeDisplaySize();
+            int displayW = displaySize[0];
+            int displayH = displaySize[1];
+            if (displayW > 0 && displayH > 0) {
+                baseW = Math.max(displayW, displayH);
+                baseH = Math.min(displayW, displayH);
+            }
+        }
+
+        return new int[] { baseW, baseH };
+    }
+
+    private void ut99V64ApplyResolutionScaleToSurface(android.view.SurfaceView sv) {
+        if (sv == null) return;
+        int percent = ut99V64NormalizeScalePercent(ut99V64ResolutionScalePercent);
+
+        android.view.SurfaceHolder holder = sv.getHolder();
+        if (holder == null) return;
+
+        if (percent >= 100) {
+            holder.setSizeFromLayout();
+            android.util.Log.i("UT99Android", "UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS SurfaceHolder Native layout size on " + sv.getClass().getName());
+            return;
+        }
+
+        int[] base = ut99V64ResolveBaseSurfaceSize(sv);
+        int baseW = base[0];
+        int baseH = base[1];
+        if (baseW <= 0 || baseH <= 0) {
+            holder.setSizeFromLayout();
+            android.util.Log.w("UT99Android", "v64 could not resolve base surface size, using native layout");
+            return;
+        }
+
+        int scaledW = Math.max(320, Math.round((baseW * percent) / 100.0f));
+        int scaledH = Math.max(240, Math.round((baseH * percent) / 100.0f));
+        scaledW = Math.max(320, scaledW & ~1);
+        scaledH = Math.max(240, scaledH & ~1);
+
+        holder.setFixedSize(scaledW, scaledH);
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS SurfaceHolder "
+                + percent + "% of native " + baseW + "x" + baseH + " -> " + scaledW + "x" + scaledH
+                + " on " + sv.getClass().getName());
+    }
+
+    private void ut99V64ApplyResolutionScalePercent(int percent, boolean persist) {
+        ut99V64ResolutionScalePercent = ut99V64NormalizeScalePercent(percent);
+        if (persist) {
+            java.io.File root = getUt99ConfigRootV63();
+            if (root != null) {
+                java.io.File systemDir = new java.io.File(root, "System");
+                if (!systemDir.exists()) systemDir.mkdirs();
+                ut99V64WriteResolutionScaleConfig(new java.io.File(systemDir, "AndroidUT99.ini"), ut99V64ResolutionScalePercent, true);
+            }
+        }
+
+        ut99V56SurfaceFixedOnce = false;
+        ut99V55ApplyFixedSurface();
+        ut99V55ScheduleFixedSurface();
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V64_RESOLUTION_SCALE_PREFS applied percent=" + ut99V64ResolutionScalePercent);
     }
 
     // UT99_ANDROID_IMMERSIVE_V44: keep the visible surface stable on Android handhelds.
@@ -837,10 +1203,8 @@ public class GameActivity extends SDLActivity {
     }
 
 
-    // UT99_ANDROID_V55_FIXED_SURFACE_960X540
+    // UT99_ANDROID_V60_NATIVE_SURFACE_AUTOSCALE
     private android.os.Handler ut99V55Handler;
-    private static final int UT99_V55_SURFACE_W = 960;
-    private static final int UT99_V55_SURFACE_H = 540;
 
     private void ut99V55ApplyFixedSurfaceToView(android.view.View view) {
         if (view == null) return;
@@ -849,16 +1213,13 @@ public class GameActivity extends SDLActivity {
             if (view instanceof android.view.SurfaceView) {
                 android.view.SurfaceView sv = (android.view.SurfaceView)view;
 
-                // v59: fullscreen visual layout, explicit touch scaling in Activity.
+                // v60: fullscreen native layout.  Do not request a fixed low-res buffer:
+                // that forces Android to render a small backbuffer and stretch it to the panel.
                 ut99V59ApplyFullscreenLayoutOnce(sv);
 
                 if (!ut99V56SurfaceFixedOnce) {
-                    android.view.SurfaceHolder holder = sv.getHolder();
-                    if (holder != null) {
-                        holder.setFixedSize(UT99_V55_SURFACE_W, UT99_V55_SURFACE_H);
-                    }
+                    ut99V64ApplyResolutionScaleToSurface(sv);
                     ut99V56SurfaceFixedOnce = true;
-                    android.util.Log.i("UT99Android", "UT99_ANDROID_V56_INPUT_SAFE_FIXED_SURFACE fixed once on " + sv.getClass().getName());
                 }
 
                 sv.setKeepScreenOn(true);
@@ -877,7 +1238,7 @@ public class GameActivity extends SDLActivity {
                 }
             }
         } catch (Throwable t) {
-            android.util.Log.e("UT99Android", "v59 fixed-surface fullscreen-touchscale patch failed", t);
+            android.util.Log.e("UT99Android", "v60 native-surface layout patch failed", t);
         }
     }
 
@@ -1000,102 +1361,18 @@ public class GameActivity extends SDLActivity {
     private boolean ut99V58ScaledSurfaceLayoutOnce = false;
 
     private void ut99V58ApplyScaledSurfaceLayoutOnce(android.view.SurfaceView sv) {
+        // v60: the old scaled low-res visual layout is intentionally disabled.
+        // Native rendering uses the fullscreen SurfaceView/layout size directly.
         if (sv == null || ut99V58ScaledSurfaceLayoutOnce) return;
-
-        try {
-            int screenW = 0;
-            int screenH = 0;
-
-            android.view.View decor = null;
-            try {
-                decor = getWindow().getDecorView();
-            } catch (Throwable ignored) {
-            }
-
-            if (decor != null && decor.getWidth() > 0 && decor.getHeight() > 0) {
-                screenW = decor.getWidth();
-                screenH = decor.getHeight();
-            }
-
-            if (screenW <= 0 || screenH <= 0) {
-                android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
-                try {
-                    getWindowManager().getDefaultDisplay().getRealMetrics(dm);
-                } catch (Throwable ignored) {
-                    dm = getResources().getDisplayMetrics();
-                }
-                screenW = dm.widthPixels;
-                screenH = dm.heightPixels;
-            }
-
-            if (screenW <= 0) screenW = UT99_V55_SURFACE_W;
-            if (screenH <= 0) screenH = UT99_V55_SURFACE_H;
-
-            float sx = ((float)screenW) / ((float)UT99_V55_SURFACE_W);
-            float sy = ((float)screenH) / ((float)UT99_V55_SURFACE_H);
-
-            android.view.ViewParent parent = sv.getParent();
-            if (parent instanceof android.view.ViewGroup) {
-                android.view.ViewGroup vg = (android.view.ViewGroup)parent;
-                vg.setClipChildren(false);
-                vg.setClipToPadding(false);
-            }
-
-            android.view.ViewGroup.LayoutParams lp = sv.getLayoutParams();
-            if (lp == null) {
-                lp = new android.view.ViewGroup.LayoutParams(UT99_V55_SURFACE_W, UT99_V55_SURFACE_H);
-            }
-
-            // v58 key change:
-            // The View itself stays 960x540, so MotionEvent local coords remain 0..960/0..540.
-            // Only the visual transform scales it to the physical screen.
-            lp.width = UT99_V55_SURFACE_W;
-            lp.height = UT99_V55_SURFACE_H;
-
-            if (lp instanceof android.view.ViewGroup.MarginLayoutParams) {
-                android.view.ViewGroup.MarginLayoutParams mlp = (android.view.ViewGroup.MarginLayoutParams)lp;
-                mlp.leftMargin = 0;
-                mlp.topMargin = 0;
-                mlp.rightMargin = 0;
-                mlp.bottomMargin = 0;
-            }
-
-            if (lp instanceof android.widget.FrameLayout.LayoutParams) {
-                android.widget.FrameLayout.LayoutParams flp = (android.widget.FrameLayout.LayoutParams)lp;
-                flp.gravity = android.view.Gravity.LEFT | android.view.Gravity.TOP;
-            }
-
-            sv.setLayoutParams(lp);
-            sv.setPivotX(0.0f);
-            sv.setPivotY(0.0f);
-            sv.setX(0.0f);
-            sv.setY(0.0f);
-            sv.setTranslationX(0.0f);
-            sv.setTranslationY(0.0f);
-            sv.setScaleX(sx);
-            sv.setScaleY(sy);
-            sv.setKeepScreenOn(true);
-            sv.setFocusable(true);
-            sv.setFocusableInTouchMode(true);
-            sv.requestLayout();
-            sv.invalidate();
-
-            try {
-                sv.requestFocus();
-            } catch (Throwable ignored) {
-            }
-
-            ut99V58ScaledSurfaceLayoutOnce = true;
-            android.util.Log.i("UT99Android", "UT99_ANDROID_V58_SCALED_SURFACE_INPUT_SAFE_LAYOUT applied surface=960x540 screen=" + screenW + "x" + screenH + " scale=" + sx + "x" + sy);
-        } catch (Throwable t) {
-            android.util.Log.e("UT99Android", "v58 scaled SurfaceView layout failed", t);
-        }
+        ut99V59ApplyFullscreenLayoutOnce(sv);
+        ut99V58ScaledSurfaceLayoutOnce = true;
+        android.util.Log.i("UT99Android", "UT99_ANDROID_V60_NATIVE_SURFACE_AUTOSCALE disabled old scaled layout");
     }
 
 
-    // UT99_ANDROID_V59_FULLSCREEN_TOUCHSCALE
+    // UT99_ANDROID_V60_NATIVE_SURFACE_LAYOUT
     private boolean ut99V59FullscreenLayoutOnce = false;
-    private boolean ut99V59TouchScaleEnabled = true;
+    private boolean ut99V59TouchScaleEnabled = false;
     private long ut99V59LastTouchLogMs = 0L;
 
     private void ut99V59ApplyFullscreenLayoutOnce(android.view.SurfaceView sv) {
@@ -1117,8 +1394,8 @@ public class GameActivity extends SDLActivity {
                 );
             }
 
-            // v59: use the visually-working v57 layout again.
-            // Surface buffer stays fixed at 960x540, but SurfaceView occupies fullscreen.
+            // v60: SurfaceView occupies fullscreen and SurfaceHolder follows layout size.
+            // This lets SDL/EGL expose the real drawable size to Unreal.
             lp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
             lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
 
@@ -1156,8 +1433,8 @@ public class GameActivity extends SDLActivity {
             }
 
             ut99V59FullscreenLayoutOnce = true;
-            ut99V59TouchScaleEnabled = true;
-            android.util.Log.i("UT99Android", "UT99_ANDROID_V59_FULLSCREEN_TOUCHSCALE_LAYOUT applied");
+            ut99V59TouchScaleEnabled = false;
+            android.util.Log.i("UT99Android", "UT99_ANDROID_V60_NATIVE_SURFACE_AUTOSCALE fullscreen native layout applied");
         } catch (Throwable t) {
             android.util.Log.e("UT99Android", "v59 fullscreen touchscale layout failed", t);
         }
@@ -1165,41 +1442,8 @@ public class GameActivity extends SDLActivity {
 
     @Override
     public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
-        if (ut99V59TouchScaleEnabled && ev != null) {
-            try {
-                android.view.View decor = getWindow().getDecorView();
-                int screenW = (decor != null && decor.getWidth() > 0) ? decor.getWidth() : getResources().getDisplayMetrics().widthPixels;
-                int screenH = (decor != null && decor.getHeight() > 0) ? decor.getHeight() : getResources().getDisplayMetrics().heightPixels;
-
-                if (screenW > UT99_V55_SURFACE_W || screenH > UT99_V55_SURFACE_H) {
-                    float sx = ((float)UT99_V55_SURFACE_W) / ((float)Math.max(1, screenW));
-                    float sy = ((float)UT99_V55_SURFACE_H) / ((float)Math.max(1, screenH));
-
-                    float rawX = ev.getX();
-                    float rawY = ev.getY();
-                    float scaledX = Math.max(0.0f, Math.min((float)(UT99_V55_SURFACE_W - 1), rawX * sx));
-                    float scaledY = Math.max(0.0f, Math.min((float)(UT99_V55_SURFACE_H - 1), rawY * sy));
-
-                    android.view.MotionEvent copy = android.view.MotionEvent.obtain(ev);
-                    copy.setLocation(scaledX, scaledY);
-
-                    long now = android.os.SystemClock.uptimeMillis();
-                    if (now - ut99V59LastTouchLogMs > 750L) {
-                        ut99V59LastTouchLogMs = now;
-                        android.util.Log.i("UT99Android", "UT99_ANDROID_V59_TOUCHSCALE dispatch raw=" + rawX + "," + rawY + " scaled=" + scaledX + "," + scaledY + " screen=" + screenW + "x" + screenH);
-                    }
-
-                    try {
-                        return super.dispatchTouchEvent(copy);
-                    } finally {
-                        copy.recycle();
-                    }
-                }
-            } catch (Throwable t) {
-                android.util.Log.e("UT99Android", "v59 touchscale dispatch failed", t);
-            }
-        }
-
+        // v60: no low-res touch rescaling.  Touch/mouse events now stay in native
+        // SurfaceView coordinates so SDL and Unreal see the same drawable size.
         return super.dispatchTouchEvent(ev);
     }
 }
