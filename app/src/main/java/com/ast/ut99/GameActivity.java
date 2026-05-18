@@ -348,6 +348,13 @@ public class GameActivity extends SDLActivity {
     protected String[] getLibraries() {
         return new String[] {
                 "SDL2",
+                // UT99_ANDROID_V137_OUYA_LIBXMP_PRELOAD:
+                // Android 4.1.2 / OUYA does not reliably resolve native
+                // DT_NEEDED dependencies from the app lib directory when
+                // libUnrealTournament.so is loaded.  Preload libxmp explicitly
+                // before UnrealTournament so the direct-linked UMX music backend
+                // can start on OUYA as well as newer Android devices.
+                "xmp",
                 "UnrealTournament"
         };
     }

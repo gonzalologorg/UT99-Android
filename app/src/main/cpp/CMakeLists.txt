@@ -20,6 +20,27 @@ set(SDL2_ROOT "${THIRD_PARTY_DIR}/SDL2")
 set(UT99DC_ROOT "${THIRD_PARTY_DIR}/ut99dc")
 set(UT99DC_SOURCE_DIR "${UT99DC_ROOT}/Source")
 
+# UT99_ANDROID_UMX_LIBXMP_V4_BEGIN
+# Link libxmp like the working Unreal Android 1.4.3 music path: as a real
+# native dependency, not via dlopen().  The .so is supplied by the user under
+# app/src/main/jniLibs/armeabi-v7a/libxmp.so and is also packaged by Gradle.
+set(UT99_LIBXMP_SO "${CMAKE_CURRENT_LIST_DIR}/../jniLibs/${ANDROID_ABI}/libxmp.so")
+set(UT99_LIBXMP_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/android/include")
+if(EXISTS "${UT99_LIBXMP_SO}")
+    add_library(ut99_libxmp SHARED IMPORTED GLOBAL)
+    set_target_properties(ut99_libxmp PROPERTIES
+        IMPORTED_LOCATION "${UT99_LIBXMP_SO}"
+        INTERFACE_INCLUDE_DIRECTORIES "${UT99_LIBXMP_INCLUDE_DIR}"
+    )
+    set(LIBXMP_INCLUDE_DIR "${UT99_LIBXMP_INCLUDE_DIR}" CACHE PATH "UT99 Android libxmp include dir" FORCE)
+    set(LIBXMP_LIBRARY ut99_libxmp CACHE STRING "UT99 Android libxmp imported target" FORCE)
+    message(STATUS "UT99 Android music: using prebuilt libxmp at ${UT99_LIBXMP_SO}")
+else()
+    message(WARNING "UT99 Android music: libxmp.so not found at ${UT99_LIBXMP_SO}; UMX music support will be compiled out.")
+endif()
+# UT99_ANDROID_UMX_LIBXMP_V4_END
+
+
 add_library(ut99dc_android_bridge SHARED android_bridge.cpp)
 target_link_libraries(ut99dc_android_bridge android log)
 
@@ -117,5 +138,5 @@ endif()
 # already uses the plain target_link_libraries() signature in its own CMake file,
 # so this Android wrapper must use the same plain signature too.
 if(TARGET UnrealTournament)
-    target_link_libraries(UnrealTournament log android)
+    target_link_libraries(UnrealTournament log android dl)
 endif()
