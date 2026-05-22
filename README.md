@@ -25,11 +25,13 @@ Original Unreal Tournament game data is **not included**.
 You need a valid PC installation of Unreal Tournament / UT99 and must import your own game data.
 
 > [!IMPORTANT]
+> **Original UT99 game data is not included. You need valid Unreal Tournament v400 data.**
+> 
+> Video games on smartphones are great, but not user-friendly if they require more than two thumbs to control. For this reason, this port is designed for controller input and does not support touchscreen controls.
+>
 > This project is for preservation, experimentation and personal use only.  
 > Unreal Tournament, Unreal Engine and related trademarks are owned by Epic Games.  
 > This project is not affiliated with or endorsed by Epic Games.
-> 
-> Video games on smartphones are great, but not user-friendly if they require more than two thumbs to control. For this reason, this port is designed for controller input and does not support touchscreen controls.
 
 ---
 
