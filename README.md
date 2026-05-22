@@ -21,9 +21,6 @@
 
 The goal of this project is to make the original Unreal Tournament playable on Android devices, including legacy Android hardware such as the **OUYA console**, while preserving the classic look and feel of the PC version.
 
-Original Unreal Tournament game data is **not included**.  
-You need a valid PC installation of Unreal Tournament / UT99 and must import your own game data.
-
 > [!IMPORTANT]
 > **Original UT99 game data is not included. You need valid Unreal Tournament v400 data.**
 > 
