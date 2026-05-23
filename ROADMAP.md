@@ -18,7 +18,7 @@
 
 - [x] Android gamepad support
 - [x] OUYA controller support
-- [ ] Add Android mouse support
+- [x] Add Android mouse support
 
 ## Future/Uncertain Expansions
 
