@@ -36,6 +36,7 @@ UPackage*					UObject::GObjTransientPkg		= NULL;
 TCHAR						UObject::GObjCachedLanguage[32] = TEXT("");
 TCHAR						UObject::GLanguage[64]          = TEXT("int");
 UObject*					UObject::GObjHash[4096];
+
 TArray<UObject*>			UObject::GObjLoaded;
 TArray<UObject*>			UObject::GObjObjects;
 TArray<INT>					UObject::GObjAvailable;
@@ -45,6 +46,8 @@ TArray<UObject*>			UObject::GObjRegistrants;
 TArray<FPreferencesInfo>	UObject::GObjPreferences;
 TArray<FRegistryObjectInfo> UObject::GObjDrivers;
 TMultiMap<FName,FName>*		UObject::GObjPackageRemap;
+
+static TMap<UObject*, UObject*> GNextAutoRegister;
 static INT GGarbageRefCount=0;
 
 
@@ -68,6 +71,7 @@ UObject::UObject( EInPlaceConstructor, UClass* InClass, UObject* InOuter, FName 
 	StaticAllocateObject( InClass, InOuter, InName, InFlags, NULL, GError, this );
 	unguard;
 }
+
 UObject::UObject( ENativeConstructor, UClass* InClass, const TCHAR* InName, const TCHAR* InPackageName, DWORD InFlags )
 :	Index		( INDEX_NONE				)
 ,	HashNext	( NULL						)
@@ -90,8 +94,8 @@ UObject::UObject( ENativeConstructor, UClass* InClass, const TCHAR* InName, cons
 	check(sizeof(_LinkerIndex)>=sizeof(GAutoRegister));
 	*(const TCHAR  **)&Outer        = InPackageName;
 	*(const TCHAR  **)&Name         = InName;
-	*(UObject      **)&_LinkerIndex = GAutoRegister;
 	GAutoRegister                   = this;
+	GAutoRegister = GNextAutoRegister.FindRef(GAutoRegister);
 
 	// Call native registration from terminal constructor.
 	if( GetInitialized() && GetClass()==StaticClass() )
@@ -1285,6 +1289,7 @@ void SerTest( FArchive& Ar, DWORD& Value, DWORD Max )
 //
 void UObject::StaticInit()
 {
+
 	guard(UObject::StaticInit);
 	GObjNoRegister = 1;
 
@@ -1333,19 +1338,62 @@ void UObject::StaticInit()
 //
 // Process all objects that have registered.
 //
+struct FAutoRegNode
+{
+	UObject* Obj;
+	FAutoRegNode* Next;
+};
+
 void UObject::ProcessRegistrants()
 {
 	guard(UObject::ProcessRegistrants);
 	if( ++GObjRegisterCount==1 )
 	{
+		if (GAutoRegister->AutoRegisterNext) {
+			//for( ; GAutoRegister; GAutoRegister = GAutoRegister->AutoRegisterNext )
+			//	LOGI("  %s", GAutoRegister->GetFullName());
+		}
 		// Make list of all objects to be registered.
-		for( ; GAutoRegister; GAutoRegister=*(UObject **)&GAutoRegister->_LinkerIndex )
+		for( ; GAutoRegister; GAutoRegister = GAutoRegister->AutoRegisterNext ) {
+			// LOGI("Adding %s to registration list", GAutoRegister->GetFullName());
+			// LOGI("Added %s to registration list", GAutoRegister->InName);
 			GObjRegistrants.AddItem( GAutoRegister );
-		for( INT i=0; i<GObjRegistrants.Num(); i++ )
+		}
+
+		LOGI("To register %i GObjRegistrants", GObjRegistrants.Num());
+		for( INT i=0; i<GObjRegistrants.Num(); i++ ) {
+			LOGI("Processing conditional register#%i", i);
+			UObject* Obj = GObjRegistrants(i);
+			LOGI("VTable=%p", *(void**)Obj);
+			LOGI("Obj=%p", Obj);
+
+			if (!Obj)
+			{
+				LOGE("NULL registrant");
+				continue;
+			}
+
+			LOGI("Obj->_LinkerIndex=%d", Obj->_LinkerIndex);
+
+			LOGI("Obj->Class=%p", Obj->Class);
+
+			LOGI("Obj->Outer=%p", Obj->Outer);
+
+			LOGI("offsetof(UObject, Class)=0x%x",
+			offsetof(UObject, Class));
+
+			LOGI("&Obj->Class=%p",
+				&Obj->Class);
+
+			LOGI("sizeof(UObject)=%d",
+				sizeof(UObject));
 			GObjRegistrants(i)->ConditionalRegister();
+		}
+
 		GObjRegistrants.Empty();
 		check(!GAutoRegister);
 	}
+	
 	GObjRegisterCount--;
 	unguard;
 }
@@ -3061,16 +3109,6 @@ UObject* UObject::StaticAllocateObject
 	check(Error);
 	check(!InClass || InClass->ClassWithin);
 	check(!InClass || InClass->ClassConstructor);
-
-	// Validation checks.
-	LOGI("offsetof(UObject, Outer)=%d", (int)offsetof(UObject, Outer));
-	LOGI("offsetof(UObject, Class)=%d", (int)offsetof(UObject, Class));
-	LOGI("offsetof(UField, Next)=%d", (int)offsetof(UField, Next));
-	LOGI("offsetof(UClass, ClassWithin)=%d", (int)offsetof(UClass, ClassWithin));
-
-	LOGI("alignof(UObject)=%d", (int)alignof(UObject));
-	LOGI("alignof(UClass)=%d", (int)alignof(UClass));
-	LOGI("alignof(UField)=%d", (int)alignof(UField));
 
 	if( InOuter && !InOuter->IsA(InClass->ClassWithin) )
 	{

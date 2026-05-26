@@ -454,6 +454,8 @@ public:
 	virtual void Register();
 	virtual void LanguageChange();
 
+
+
 	// Systemwide functions.
 	static UObject* StaticFindObject( UClass* Class, UObject* InOuter, const TCHAR* Name, UBOOL ExactClass=0 );
 	static UObject* StaticFindObjectChecked( UClass* Class, UObject* InOuter, const TCHAR* Name, UBOOL ExactClass=0 );

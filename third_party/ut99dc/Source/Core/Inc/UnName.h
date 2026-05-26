@@ -9,7 +9,10 @@
 /*----------------------------------------------------------------------------
 	Definitions.
 ----------------------------------------------------------------------------*/
+#include <android/log.h>
 
+#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "Unreal", __VA_ARGS__))
+#define LOGE(...) ((void)__android_log_print(ANDROID_LOG_ERROR, "Unreal", __VA_ARGS__))
 // Maximum size of name.
 enum {NAME_SIZE	= 64};
 
@@ -66,6 +69,19 @@ public:
 	// Accessors.
 	const TCHAR* operator*() const
 	{
+		// if (Index >= 0 && Index < Names.Num())
+		// {
+		// 	LOGI("Entry=%p", Names(Index));
+
+		// 	if (Names(Index))
+		// 	{
+		// 		LOGI("Name=%s",
+		// 			Names(Index)->Name
+		// 				? Names(Index)->Name
+		// 				: "NULL");
+		// 	}
+		// }
+		
 		checkName(Index < Names.Num());
 		checkName(Names(Index));
 		return Names(Index)->Name;
@@ -123,13 +139,59 @@ public:
 	static void Hardcode( FNameEntry* AutoName );
 
 	// Name subsystem accessors.
+	// Name subsystem accessors.
 	static const TCHAR* SafeString( EName Index )
 	{
-		return Initialized ? Names(Index)->Name : TEXT("Uninitialized");
+		if (!Initialized)
+		{
+			return TEXT("Uninitialized");
+		}
+
+		if ((INT)Index < 0 || (INT)Index >= Names.Num())
+		{
+			LOGE("SafeString invalid index=%d", (int)Index);
+			return TEXT("BadIndex");
+		}
+
+		FNameEntry* Entry = Names(Index);
+
+		if (!Entry)
+		{
+			LOGE("SafeString NULL entry");
+			return TEXT("NullEntry");
+		}
+
+		if (!Entry->Name)
+		{
+			LOGE("SafeString NULL name");
+			return TEXT("NullName");
+		}
+
+		return Entry->Name;
 	}
 	static UBOOL SafeSuppressed( EName Index )
 	{
-		return Initialized && (Names(Index)->Flags & 0x00001000);
+		if (!Initialized)
+        	return 0;
+
+		INT Idx = (INT)Index;
+
+		if (Idx < 0 || Idx >= Names.Num())
+		{
+			LOGE("Invalid index=%d Num=%d",
+				Idx,
+				Names.Num());
+			return 0;
+		}
+
+		FNameEntry* Entry = Names(Idx);
+		if (!Entry)
+		{
+			LOGE("NULL name entry at %d", Idx);
+			return 0;
+		}
+
+		return (Entry->Flags & 0x00001000);
 	}
 	static int GetMaxNames()
 	{

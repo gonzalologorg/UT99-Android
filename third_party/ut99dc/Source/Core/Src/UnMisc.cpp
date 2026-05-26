@@ -8,6 +8,10 @@
 
 // Core includes.
 #include "CorePrivate.h"
+#include <android/log.h>
+
+#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "Unreal", __VA_ARGS__))
+#define LOGE(...) ((void)__android_log_print(ANDROID_LOG_ERROR, "Unreal", __VA_ARGS__))
 
 /*-----------------------------------------------------------------------------
 	FOutputDevice implementation.
@@ -1720,7 +1724,7 @@ CORE_API void appInit( const TCHAR* InPackage, const TCHAR* InCmdLine, FMalloc* 
 	{
 		// Create Package.ini from default.ini.
 		FString S;
-		if( !appLoadFileToString( S, TEXT("Default.ini"), GFileManager ) )
+		if( !appLoadFileToString( S, TEXT("UT99/System/Default.ini"), GFileManager ) )
 			appErrorf( LocalizeError("MissingIni Default.ini"), "Default.ini" );
 		appSaveStringToFile( S, GIni );
 	}
@@ -1739,7 +1743,7 @@ CORE_API void appInit( const TCHAR* InPackage, const TCHAR* InCmdLine, FMalloc* 
 	{
 		// Create User.ini from DefUser.ini.
 		FString S;
-		if( !appLoadFileToString( S, TEXT("DefUser.ini"), GFileManager ) )
+		if( !appLoadFileToString( S, TEXT("UT99/System/DefUser.ini"), GFileManager ) )
 			appErrorf( LocalizeError("MissingIni DefUser.ini"), "DefUser.ini" );
 		appSaveStringToFile( S, GUserIni );
 	}
@@ -1754,6 +1758,7 @@ CORE_API void appInit( const TCHAR* InPackage, const TCHAR* InCmdLine, FMalloc* 
 		UObject::SetLanguage( Temp );
 
 	// Object initialization.
+	LOGE("Language is %s", UObject::GetLanguage() );
 	UObject::StaticInit();
 
 	// Memory initalization.
