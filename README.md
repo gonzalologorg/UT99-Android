@@ -17,6 +17,20 @@
 ![ABI](https://img.shields.io/badge/ABI-armeabi--v7a-orange)
 ![Controller](https://img.shields.io/badge/controls-only%20Controller-blueviolet)
 
+# x64 Port WIP
+
+> This is a fork in order to learn to port a program into x64
+
+## It's not functional!
+- I have no idea what i'm doing
+- I don't know if i ever will success on it
+- I'm kinda vibecoding it (To bold first 2 points)
+
+But my main goal is to be able to compile it so i can run it on Pico4, so this is not really for x64 but Android -> VR
+I hope to be able to get it done, I really wanna play (After enjoying cs 1.6 vr) UnrealTournament, along ut2004, those are **MY FAVORITE** games, so let's hope everything goes well
+
+## 
+
 **Unreal Tournament Android** is an Android port of **Unreal Tournament / UT99 (1999)** based on the classic **Unreal Engine 1** source code.
 
 The goal of this project is to make the original Unreal Tournament playable on Android devices, including legacy Android hardware such as the **OUYA console**, while preserving the classic look and feel of the PC version.
