@@ -41,6 +41,15 @@ void FOutputDevice::Logf( EName Event, const TCHAR* Fmt, ... )
 {
 	TCHAR TempStr[4096];
 	GET_VARARGS(TempStr,ARRAY_COUNT(TempStr),Fmt);
+
+#ifdef ANDROID
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "[LogF]",
+        "%s",
+        TempStr);
+#endif
+
 	if( !FName::SafeSuppressed(Event) )
 	{
 		Serialize( TempStr, Event );
@@ -50,6 +59,8 @@ void FOutputDevice::Logf( const TCHAR* Fmt, ... )
 {
 	TCHAR TempStr[4096];
 	GET_VARARGS(TempStr,ARRAY_COUNT(TempStr),Fmt);
+
+	
 	if( !FName::SafeSuppressed(NAME_Log) )
 	{
 		Serialize( TempStr, NAME_Log );
@@ -1639,6 +1650,7 @@ static UBOOL IsReadOnly( const TCHAR* Filename )
 	return 0;
 	unguard;
 }*/
+
 static TCHAR GCmdLine[1024]=TEXT("");
 CORE_API const TCHAR* appCmdLine()
 {
@@ -1687,17 +1699,36 @@ CORE_API void appInit( const TCHAR* InPackage, const TCHAR* InCmdLine, FMalloc* 
 	GWarn        = InWarn;
 	GFileManager = InFileManager;
 
-	// Memory allocator.
-	GMalloc = InMalloc;
-	GMalloc->Init();
-
-	// Init names.
-	FName::StaticInit();
-
+	debugf( NAME_Init, TEXT("Platform Preinit"));
 	// Platform specific pre-init.
 	appPlatformPreInit();
 
+	debugf( NAME_Init, TEXT("MAlloc initializing..."));
+	// Memory allocator.
+	GMalloc = InMalloc;
+	GMalloc->Init();
+	// Init names.
+
+	debugf( NAME_Init, TEXT("FName:StaticInit initializing..."));
+	FName::StaticInit();
+	UObject::StaticInit();
+
+	//LOGI("sizeof(UObject)=%d", sizeof(UObject));
+	//LOGI("sizeof(UField)=%d", sizeof(UField));
+	//LOGI("sizeof(UProperty)=%d", sizeof(UProperty));
+	//LOGI("sizeof(UFloatProperty)=%d", sizeof(UFloatProperty));
+	//LOGI("sizeof(UClass)=%d", sizeof(UClass));
+	//UObject::DebugLayout();
+	//LOGI("offsetof(UField, Next)=%d", offsetof(UField, Next));
+	//LOGI("offsetof(UProperty, Offset)=%d", offsetof(UProperty, Offset));
+
+
+	// LOGI("offsetof(UObject, Class)=%d", offsetof(UObject, Class));
+	// LOGI("offsetof(UField, Next)=%d", offsetof(UField, Next));
+	// LOGI("offsetof(UProperty, Offset)=%d", offsetof(UProperty, Offset));
+
 	// Switch into executable's directory.
+	debugf( NAME_Init, TEXT("Switching to executable's directory..."));
 	GFileManager->SetDefaultDirectory( appBaseDir() );
 
 	// Command line.
@@ -1759,7 +1790,8 @@ CORE_API void appInit( const TCHAR* InPackage, const TCHAR* InCmdLine, FMalloc* 
 
 	// Object initialization.
 	LOGE("Language is %s", UObject::GetLanguage() );
-	UObject::StaticInit();
+
+    //UObject::ProcessRegistrants();
 
 	// Memory initalization.
 	GMem.Init( 32768 );

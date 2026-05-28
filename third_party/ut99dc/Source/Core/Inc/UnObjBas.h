@@ -288,7 +288,9 @@ public: \
 	typedef TSuperClass Super;\
 	typedef TClass ThisClass;\
 	static UClass* StaticClass() \
-		{ return &PrivateStaticClass; } \
+		{ \
+			return &PrivateStaticClass; \
+		} \
 	void* operator new( size_t Size, UObject* Outer=(UObject*)GetTransientPackage(), FName Name=NAME_None, DWORD SetFlags=0 ) \
 		{ return StaticAllocateObject( StaticClass(), Outer, Name, SetFlags ); } \
 	void* operator new( size_t Size, EInternal* Mem ) \
@@ -298,7 +300,12 @@ public: \
 #define DECLARE_CLASS( TClass, TSuperClass, TStaticFlags ) \
 	DECLARE_BASE_CLASS( TClass, TSuperClass, TStaticFlags ) \
 	friend FArchive &operator<<( FArchive& Ar, TClass*& Res ) \
-		{ return Ar << *(UObject**)&Res; } \
+		{ \
+			UObject* Obj = Res; \
+			Ar << Obj; \
+			Res = (TClass*)Obj; \
+			return Ar; \
+		} \
 	virtual ~TClass() \
 		{ ConditionalDestroy(); } \
 	static void InternalConstructor( void* X ) \
@@ -309,7 +316,12 @@ public: \
 #define DECLARE_ABSTRACT_CLASS( TClass, TSuperClass, TStaticFlags ) \
 	DECLARE_BASE_CLASS( TClass, TSuperClass, TStaticFlags | CLASS_Abstract ) \
 	friend FArchive &operator<<( FArchive& Ar, TClass*& Res ) \
-		{ return Ar << *(UObject**)&Res; } \
+		{ \
+			UObject* Obj = Res; \
+			Ar << Obj; \
+			Res = (TClass*)Obj; \
+			return Ar; \
+		} \
 	virtual ~TClass() \
 		{ ConditionalDestroy(); } \
 
@@ -350,6 +362,7 @@ public: \
 //
 // The base class of all objects.
 //
+#pragma pack(push, 4)
 class CORE_API UObject : public FUnknown
 {
 	// Declarations.
@@ -370,6 +383,7 @@ class CORE_API UObject : public FUnknown
 private:
 	// Internal per-object variables.
 	INT						Index;				// Index of object into table.
+	friend void BootstrapCoreClasses();
 	UObject*				HashNext;			// Next object in this hash bin.
 	FStateFrame*			StateFrame;			// Main script execution stack.
 	ULinkerLoad*			_Linker;			// Linker it came from, or NULL if none.
@@ -377,10 +391,14 @@ private:
 	UObject*				Outer;				// Object this object resides in.
 	DWORD					ObjectFlags;		// Private EObjectFlags used by object manager.
 	FName					Name;				// Name of the object.
+	const TCHAR* BootstrapName;
+	const TCHAR* BootstrapPackage;
+
 	UClass*					Class;	  			// Class the object belongs to.
 
 	// Private systemwide variables.
 	static UBOOL			GObjInitialized;	// Whether initialized.
+	static UBOOL			GIsBootstrapping;	// Whether bootstrapping.
 	static UBOOL            GObjNoRegister;		// Registration disable.
 	static INT				GObjBeginLoadCount;	// Count for BeginLoad multiple loads.
 	static INT				GObjRegisterCount;  // ProcessRegistrants entry counter.
@@ -395,6 +413,9 @@ private:
 	static UPackage*		GObjTransientPkg;	// Transient package.
 	static TCHAR			GObjCachedLanguage[32]; // Language;
 	static TArray<UObject*> GObjRegistrants;		// Registrants during ProcessRegistrants call.
+	static TArray<UObject*> GPendingRegistrants;
+
+
 	static TArray<FPreferencesInfo> GObjPreferences; // Prefereces cache.
 	static TArray<FRegistryObjectInfo> GObjDrivers; // Drivers cache.
 	static TMultiMap<FName,FName>* GObjPackageRemap; // Remap table for loading renamed packages.
@@ -405,7 +426,6 @@ private:
 	void HashObject();
 	void UnhashObject( INT OuterIndex );
 	void SetLinker( ULinkerLoad* L, INT I );
-
 	// Private systemwide functions.
 	static ULinkerLoad* GetLoader( INT i );
 	static FName MakeUniqueObjectName( UObject* Outer, UClass* Class );
@@ -422,6 +442,7 @@ public:
 	UObject( EInPlaceConstructor, UClass* InClass, UObject* InOuter, FName InName, DWORD InFlags );
 	UObject& operator=( const UObject& );
 	void StaticConstructor();
+	static void DebugLayout();
 	static void InternalConstructor( void* X )
 		{ new( (EInternal*)X )UObject(); }
 
@@ -434,7 +455,6 @@ public:
 	virtual DWORD STDCALL QueryInterface( const FGuid& RefIID, void** InterfacePtr );
 	virtual DWORD STDCALL AddRef();
 	virtual DWORD STDCALL Release();
-
 	// UObject interface.
 	virtual void ProcessEvent( UFunction* Function, void* Parms, void* Result=NULL );
 	virtual void ProcessState( FLOAT DeltaSeconds );
@@ -454,6 +474,7 @@ public:
 	virtual void Register();
 	virtual void LanguageChange();
 
+	static UBOOL			GIsRegistering;		// Whether registering.
 
 
 	// Systemwide functions.
@@ -465,6 +486,7 @@ public:
 	static UObject* StaticConstructObject( UClass* Class, UObject* InOuter=(UObject*)GetTransientPackage(), FName Name=NAME_None, DWORD SetFlags=0, UObject* Template=NULL, FOutputDevice* Error=GError );
 	static void StaticInit();
 	static void StaticExit();
+	void DeferredRegister();
 	static UBOOL StaticExec( const TCHAR* Cmd, FOutputDevice& Ar=*GLog );
 	static void StaticTick();
 	static UObject* LoadPackage( UObject* InOuter, const TCHAR* Filename, DWORD LoadFlags );
@@ -852,7 +874,18 @@ inline DWORD GetTypeHash( const UObject* A )
 // Parse an object name in the input stream.
 template< class T > UBOOL ParseObject( const TCHAR* Stream, const TCHAR* Match, T*& Obj, UObject* Outer )
 {
-	return ParseObject( Stream, Match, T::StaticClass(), *(UObject **)&Obj, Outer );
+	UObject* TempObj = Obj;
+
+	UBOOL Result = ParseObject(
+		Stream,
+		Match,
+		T::StaticClass(),
+		TempObj,
+		Outer );
+
+	Obj = (T*)TempObj;
+
+	return Result;
 }
 
 // Find an optional object.

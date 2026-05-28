@@ -3,6 +3,7 @@
 	Copyright 1997-1999 Epic Games, Inc. All Rights Reserved.
 =============================================================================*/
 #include <stddef.h>
+#include <android/log.h>
 
 /*-----------------------------------------------------------------------------
 	Global variables.
@@ -94,19 +95,82 @@ CORE_API FString appClipboardPaste();
 	Guard macros for call stack display.
 -----------------------------------------------------------------------------*/
 
+extern thread_local const TCHAR* GGuardStack[256];
+extern thread_local INT GGuardTop;
+
+inline void PushGuard(const TCHAR* Func)
+{
+	if (GGuardTop < 256)
+		GGuardStack[GGuardTop++] = Func;
+
+	// __android_log_print(
+	// 	ANDROID_LOG_INFO,
+	// 	"UE1",
+	// 	">> %s",
+	// 	Func
+	// );
+}
+
+inline void PopGuard()
+{
+	if (GGuardTop > 0)
+	{
+		GGuardTop--;
+		// __android_log_print(
+		// 	ANDROID_LOG_INFO,
+		// 	"UE1",
+		// 	"<< %s",
+		// 	GGuardStack[GGuardTop]
+		// );
+	}
+}
+
+inline void DumpGuardStack()
+{
+	// __android_log_print(
+	// 	ANDROID_LOG_ERROR,
+	// 	"UE1",
+	// 	"==== GUARD STACK ===="
+	// );
+
+	// for( INT i=GGuardTop-1; i>=0; --i )
+	// {
+	// 	__android_log_print(
+	// 		ANDROID_LOG_ERROR,
+	// 		"UE1",
+	// 		"#%d %s",
+	// 		i,
+	// 		GGuardStack[i]
+	// 	);
+	// }
+}
+
 //
 // guard/unguardf/unguard macros.
 // For showing calling stack when errors occur in major functions.
 // Meant to be enabled in release builds.
 //
-#if defined(_DEBUG) || !DO_GUARD
-	#define guard(func)			{static const TCHAR __FUNC_NAME__[]=TEXT(#func);
-	#define unguard				}
-	#define unguardf(msg)		}
+#if DO_GUARD
+
+	#define guard(func) \
+		{ \
+			static const TCHAR __FUNC_NAME__[] = TEXT(#func); \
+			PushGuard(__FUNC_NAME__);
+
+	#define unguard \
+			PopGuard(); \
+		}
+
+	#define unguardf(msg) \
+			PopGuard(); \
+		}
+
 #else
-	#define guard(func)			{static const TCHAR __FUNC_NAME__[]=TEXT(#func); try{
-	#define unguard				}catch(TCHAR*Err){throw Err;}catch(...){appUnwindf(TEXT("%s"),__FUNC_NAME__); throw;}}
-	#define unguardf(msg)		}catch(TCHAR*Err){throw Err;}catch(...){appUnwindf(TEXT("%s"),__FUNC_NAME__); appUnwindf msg; throw;}}
+
+	#define guard(func) {
+	#define unguard }
+	#define unguardf(msg) }
+
 #endif
 
 //

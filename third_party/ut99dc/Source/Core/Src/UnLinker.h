@@ -263,7 +263,11 @@ class CORE_API ULinker : public UObject
 		{for( INT i=0; i<ImportMap.Num(); i++ )
 		{
 			FObjectImport& I = ImportMap(i);
-			Ar << *(UObject**)&I.SourceLinker;
+			UObject* TempObj =
+				(UObject*)I.SourceLinker;
+			Ar << TempObj;
+			I.SourceLinker =
+				(ULinkerLoad*)TempObj;
 			Ar << I.ClassPackage << I.ClassName;
 		}}
 		unguard;
@@ -776,6 +780,7 @@ private:
 	UObject* CreateExport( INT Index )
 	{
 		guard(ULinkerLoad::CreateExport);
+        LOGI("=== START %d ===", Index);
 
 		// Map the object into our table.
 		FObjectExport& Export = ExportMap( Index );
@@ -834,8 +839,24 @@ private:
 	// Return the loaded object corresponding to an import index; any errors are fatal.
 	UObject* CreateImport( INT Index )
 	{
+		LOGI("=== START %d ===", Index);
+
 		guard(ULinkerLoad::CreateImport);
 		FObjectImport& Import = ImportMap( Index );
+
+		LOGI("=== CreateImport %d ===", Index);
+
+		LOGI("ClassPackage=%s", *Import.ClassPackage);
+		LOGI("ClassName=%s", *Import.ClassName);
+		LOGI("ObjectName=%s", *Import.ObjectName);
+
+		//LOGI("OuterIndex=%d", Import.OuterIndex);
+		LOGI("SourceLinker=%p", Import.SourceLinker);
+		LOGI("XObject=%p", Import.XObject);
+
+		LOGI("sizeof(FObjectImport)=%d", sizeof(FObjectImport));
+		LOGI("sizeof(FObjectExport)=%d", sizeof(FObjectExport));
+	
 		if( !Import.XObject && Import.SourceIndex>=0 )
 		{
 			//debugf( "Imported new %s %s.%s", *Import.ClassName, *Import.ObjectPackage, *Import.ObjectName );
@@ -983,10 +1004,12 @@ private:
 	FArchive& operator<<( UObject*& Object )
 	{
 		guard(ULinkerLoad<<UObject);
-
+		LOGI("[SER] UObject ptr=%p", Object);
 		INT Index;
 		*Loader << AR_INDEX(Index);
 		Object = IndexToObject( Index );
+
+		LOGI("[SER] Post UObject ptr=%p", Object);
 
 		return *this;
 		unguardf(( TEXT("(%s %i))"), GetFullName(), Tell() ));
@@ -1088,7 +1111,9 @@ class ULinkerSave : public ULinker, public FArchive
 	FArchive& operator<<( UObject*& Obj )
 	{
 		guardSlow(ULinkerSave<<UObject);
+		LOGI("[SER] UObject ptr=%p", Obj);
 		INT Save = Obj ? ObjectIndices(Obj->GetIndex()) : 0;
+		LOGI("[SER] Post UObject ptr=%p", Obj);
 		return *this << AR_INDEX(Save);
 		unguardobjSlow;
 	}

@@ -46,8 +46,28 @@ TArray<UObject*>			UObject::GObjRegistrants;
 TArray<FPreferencesInfo>	UObject::GObjPreferences;
 TArray<FRegistryObjectInfo> UObject::GObjDrivers;
 TMultiMap<FName,FName>*		UObject::GObjPackageRemap;
+TArray<UObject*> 			UObject::GPendingRegistrants;
+UBOOL 						UObject::GIsRegistering = 0;
 
-static TMap<UObject*, UObject*> GNextAutoRegister;
+TArray<UObject*> GAutoRegisterQueue;
+TArray<UObject*> GAutoRegisterNextQueue;
+UBOOL GInAutoRegisterPhase = 0;
+
+void AddAutoRegister(UObject* Obj)
+{
+    if (!Obj) return;
+
+    if (GInAutoRegisterPhase)
+    {
+        // defer to next pass
+        GAutoRegisterNextQueue.AddItem(Obj);
+        return;
+    }
+
+    GAutoRegisterQueue.AddItem(Obj);
+}
+
+
 static INT GGarbageRefCount=0;
 
 
@@ -56,11 +76,14 @@ static INT GGarbageRefCount=0;
 -----------------------------------------------------------------------------*/
 
 UObject::UObject()
+: BootstrapName(NULL)
+, BootstrapPackage(NULL)
 {}
 UObject::UObject( const UObject& Src )
 {
 	guard(UObject::UObject);
 	check(&Src);
+
 	if( Src.GetClass()!=GetClass() )
 		appErrorf( TEXT("Attempt to copy-construct %s from %s"), GetFullName(), Src.GetFullName() );
 	unguard;
@@ -88,16 +111,21 @@ UObject::UObject( ENativeConstructor, UClass* InClass, const TCHAR* InName, cons
 	// Make sure registration is allowed now.
 	check(!GObjNoRegister);
 
+	// Bootstraping.
+	BootstrapName    = InName;
+	BootstrapPackage = InPackageName;
+
 	// Setup registration info, for processing now (if inited) or later (if starting up).
 	check(sizeof(Outer       )>=sizeof(InPackageName));
 	check(sizeof(Name        )>=sizeof(InName       ));
 	check(sizeof(_LinkerIndex)>=sizeof(GAutoRegister));
-	*(const TCHAR  **)&Outer        = InPackageName;
-	*(const TCHAR  **)&Name         = InName;
-	GAutoRegister                   = this;
-	GAutoRegister = GNextAutoRegister.FindRef(GAutoRegister);
+	//*(const TCHAR  **)&Outer        = InPackageName;
+	//Name         = FName(InName);
 
+	DeferredRegister();
+	//GAutoRegisterQueue.AddItem(Node->Obj);
 	// Call native registration from terminal constructor.
+	LOGI("REGISTER CLASS: %s", StaticClass()->GetName());
 	if( GetInitialized() && GetClass()==StaticClass() )
 		Register();
 
@@ -123,6 +151,13 @@ void UObject::StaticConstructor()
 	unguard;
 }
 
+/*-----------------------------------------------------------------------------
+	UObject class force stuff.
+-----------------------------------------------------------------------------*/
+void BootstrapCoreClasses()
+{
+    UObject::StaticClass()->Index = 0;
+}
 /*-----------------------------------------------------------------------------
 	UObject implementation.
 -----------------------------------------------------------------------------*/
@@ -266,24 +301,25 @@ void UObject::SetLinker( ULinkerLoad* InLinker, INT InLinkerIndex )
 //
 const TCHAR* UObject::GetPathName( UObject* StopOuter, TCHAR* Str ) const
 {
-	guard(UObject::GetPathName);
+    TCHAR* Result = Str ? Str : appStaticString1024();
 
-	// Return one of 8 circular results.
-	TCHAR* Result = Str ? Str : appStaticString1024();
-	if( this!=StopOuter )
-	{
-		*Result = 0;
-		if( Outer!=StopOuter )
-		{
-			Outer->GetPathName( StopOuter, Result );
-			appStrcat( Result, TEXT(".") );
-		}
-		appStrcat( Result, GetName() );
-	}
-	else appSprintf( Result, TEXT("None") );
+    if( this == StopOuter )
+    {
+        appSprintf(Result, TEXT("None"));
+        return Result;
+    }
 
-	return Result;
-	unguard; // Not unguard, because it causes crash recusion.
+    *Result = 0;
+
+    if( Outer && Outer != this && Outer != StopOuter )
+    {
+        Outer->GetPathName( StopOuter, Result );
+        appStrcat( Result, TEXT(".") );
+    }
+
+    appStrcat( Result, GetName() );
+
+    return Result;
 }
 
 //
@@ -293,6 +329,10 @@ const TCHAR* UObject::GetPathName( UObject* StopOuter, TCHAR* Str ) const
 const TCHAR* UObject::GetFullName( TCHAR* Str ) const
 {
 	guard(UObject::GetFullName);
+	if (GIsBootstrappingClassObject)
+	{
+		return TEXT("Bootstrapping");
+	}
 
 	// Return one of 8 circular results.
 	TCHAR* Result = Str ? Str : appStaticString1024();
@@ -335,6 +375,9 @@ UBOOL UObject::ConditionalDestroy()
 void UObject::ConditionalRegister()
 {
 	guard(UObject::ConditionalRegister);
+	if (!GObjInitialized || !GIsRunning)
+        return;
+
 	if( GetIndex()==INDEX_NONE )
 	{
 		// Verify this object is on the list to register.
@@ -344,7 +387,6 @@ void UObject::ConditionalRegister()
 				break;
 		check(i!=GObjRegistrants.Num());
 
-		// Register it.
 		Register();
 	}
 	unguardobj;
@@ -1061,7 +1103,8 @@ UObject* UObject::GetIndexedObject( INT Index )
 UObject* UObject::StaticFindObject( UClass* ObjectClass, UObject* InObjectPackage, const TCHAR* InName, UBOOL ExactClass )
 {
 	guard(UObject::StaticFindObject);
-
+	LOGI("StaticFindObject searching %s",
+    	InName);
 	// Resolve the object and package name.
 	UObject* ObjectPackage = InObjectPackage!=ANY_PACKAGE ? InObjectPackage : NULL;
 	if( !ResolveName( ObjectPackage, InName, 0, 0 ) )
@@ -1179,13 +1222,12 @@ void UObject::ExitProperties( BYTE* Data, UClass* Class )
 void UObject::InitClassDefaultObject( UClass* InClass )
 {
 	guard(UObject::InitClassDefaultObject);
-
 	// Init UObject portion.
 	appMemset( this, 0, sizeof(UObject) );
+
 	*(void**)this = *(void**)InClass;
 	Class         = InClass;
 	Index         = INDEX_NONE;
-
 	// Init post-UObject portion.
 	InitProperties( (BYTE*)this, InClass->GetPropertiesSize(), InClass->GetSuperClass(), NULL, 0 );
 
@@ -1229,32 +1271,46 @@ void UObject::GlobalSetProperty( const TCHAR* Value, UClass* Class, UProperty* P
 //
 void UObject::Register()
 {
-	guard(UObject::Register);
-	check(GObjInitialized);
+	
+	LOGI("BootstrapName=%s", BootstrapName ? BootstrapName : "NULL");
+	LOGI("BootstrapPackage=%s", BootstrapPackage ? BootstrapPackage : "NULL");
+	LOGI("Current Name Index=%d", Name.GetIndex());
 
-	// Get stashed registration info.
-	const TCHAR* InOuter = *(const TCHAR**)&Outer;
-	const TCHAR* InName  = *(const TCHAR**)&Name;
-	LOGI("InOuter ptr = %p", InOuter);
-	LOGI("InName ptr = %p", InName);
+    guard(UObject::Register);
 
-	// Set object properties.
-	Outer        = CreatePackage(NULL,InName);
-	Name         = InName;
-	_LinkerIndex = INDEX_NONE;
+    check(GObjInitialized);
 
-	// Validate the object.
-	if( Outer==NULL )
-		appErrorf( TEXT("Autoregistered object %s is unpackaged"), GetFullName() );
-	if( GetFName()==NAME_None )
-		appErrorf( TEXT("Autoregistered object %s has invalid name"), GetFullName() );
-	if( StaticFindObject( NULL, GetOuter(), GetName() ) )
-		appErrorf( TEXT("Autoregistered object %s already exists"), GetFullName() );
+    //
+    // Initialize from bootstrap metadata.
+    //
+    if( BootstrapName )
+    {
+        Name = FName(BootstrapName);
+    }
 
-	// Add to the global object table.
-	AddObject( INDEX_NONE );
+    if( BootstrapPackage )
+    {
+        Outer = CreatePackage(NULL, BootstrapPackage);
+    }
 
-	unguard;
+    _LinkerIndex = INDEX_NONE;
+
+    //
+    // Validation.
+    //
+    if( GetFName() == NAME_None )
+    {
+        appErrorf(TEXT("Register failed: NAME_None"));
+    }
+
+    //
+    // Add to object table.
+    //
+    AddObject(INDEX_NONE);
+	LOGI("AFTER Name Index=%d", Name.GetIndex());
+	LOGI("AFTER Name=%s", *Name);
+
+    unguard;
 }
 
 //
@@ -1290,6 +1346,20 @@ void SerTest( FArchive& Ar, DWORD& Value, DWORD Max )
 void UObject::StaticInit()
 {
 
+	if( appStricmp(BootstrapName, "Class") == 0 ) {
+		LOGI("=== CLASS DEBUG ===");
+		LOGI("this=%p", this);
+		LOGI("Name=%s", GetName());
+		LOGI("Class=%p", Class);
+		if(Class) {
+			LOGI("Class->GetName=%s", Class->GetName());
+		}
+		LOGI("Outer=%p", Outer);
+		if(Outer) {
+			LOGI("Outer=%s", Outer->GetName());
+		}
+	}
+
 	guard(UObject::StaticInit);
 	GObjNoRegister = 1;
 
@@ -1321,7 +1391,6 @@ void UObject::StaticInit()
 	GObjInitialized = 1;
 
 	// Add all autoregistered classes.
-	ProcessRegistrants();
 
 	// Allocate special packages.
 	GObjTransientPkg = new( NULL, TEXT("Transient") )UPackage;
@@ -1347,55 +1416,26 @@ struct FAutoRegNode
 void UObject::ProcessRegistrants()
 {
 	guard(UObject::ProcessRegistrants);
-	if( ++GObjRegisterCount==1 )
-	{
-		if (GAutoRegister->AutoRegisterNext) {
-			//for( ; GAutoRegister; GAutoRegister = GAutoRegister->AutoRegisterNext )
-			//	LOGI("  %s", GAutoRegister->GetFullName());
-		}
-		// Make list of all objects to be registered.
-		for( ; GAutoRegister; GAutoRegister = GAutoRegister->AutoRegisterNext ) {
-			// LOGI("Adding %s to registration list", GAutoRegister->GetFullName());
-			// LOGI("Added %s to registration list", GAutoRegister->InName);
-			GObjRegistrants.AddItem( GAutoRegister );
-		}
 
-		LOGI("To register %i GObjRegistrants", GObjRegistrants.Num());
-		for( INT i=0; i<GObjRegistrants.Num(); i++ ) {
-			LOGI("Processing conditional register#%i", i);
-			UObject* Obj = GObjRegistrants(i);
-			LOGI("VTable=%p", *(void**)Obj);
-			LOGI("Obj=%p", Obj);
+    GIsRegistering = 1;
 
-			if (!Obj)
-			{
-				LOGE("NULL registrant");
-				continue;
-			}
+    LOGI("Processing %d registrants", GPendingRegistrants.Num());
 
-			LOGI("Obj->_LinkerIndex=%d", Obj->_LinkerIndex);
+    for( INT i=0; i<GPendingRegistrants.Num(); i++ )
+    {
+        UObject* Obj = GPendingRegistrants(i);
 
-			LOGI("Obj->Class=%p", Obj->Class);
+        if (!Obj)
+            continue;
 
-			LOGI("Obj->Outer=%p", Obj->Outer);
+        Obj->Register();
+    }
 
-			LOGI("offsetof(UObject, Class)=0x%x",
-			offsetof(UObject, Class));
+    GPendingRegistrants.Empty();
 
-			LOGI("&Obj->Class=%p",
-				&Obj->Class);
+    GIsRegistering = 0;
 
-			LOGI("sizeof(UObject)=%d",
-				sizeof(UObject));
-			GObjRegistrants(i)->ConditionalRegister();
-		}
-
-		GObjRegistrants.Empty();
-		check(!GAutoRegister);
-	}
-	
-	GObjRegisterCount--;
-	unguard;
+    unguard;
 }
 
 //
@@ -1594,6 +1634,7 @@ private:
 	FArchive& operator<<( UObject*& Obj )
 	{
 		guard(FArchiveShowReferences<<Obj);
+		LOGI("[SER] UObject ptr=%p", Obj);
 		if( Obj && Obj->GetOuter()!=Parent )
 		{
 			INT i;
@@ -1608,6 +1649,7 @@ private:
 				DidRef=1;
 			}
 		}
+		LOGI("[SER] Post UObject ptr=%p", Obj);
 		return *this;
 		unguard;
 	}
@@ -2252,11 +2294,24 @@ UObject* UObject::StaticLoadObject( UClass* ObjectClass, UObject* InOuter, const
 	check(ObjectClass);
 	check(InName);
 
+	LOGI("GObjPackageRemap=%p", GObjPackageRemap);
+	LOGI("ObjectClass=%p", ObjectClass);
+	if (ObjectClass)
+	{
+		LOGI("ObjectClass raw name index=%d",
+			*(INT*)((BYTE*)ObjectClass + offsetof(UObject, Name)));
+	}
+
 	// Try to load.
 	UObject* Result=NULL;
 	BeginLoad();
 	try
 	{
+		LOGI("StaticLoadObject Class=%s Outer=%s Name=%s",
+			ObjectClass ? ObjectClass->GetName() : "NULL",
+			InOuter ? InOuter->GetName() : "NULL",
+			InName ? InName : "NULL");
+			
 		// Create a new linker object which goes off and tries load the file.
 		ULinkerLoad* Linker = NULL;
 		ResolveName( InOuter, InName, 1, 1 );
@@ -2281,14 +2336,22 @@ UObject* UObject::StaticLoadObject( UClass* ObjectClass, UObject* InOuter, const
 		{
 			// Try loading a remapped package.
 			TArray<FName> Remaps;
-			GObjPackageRemap->MultiFind( InOuter->GetFName(), Remaps );
-			for( INT i=0; i<Remaps.Num(); i++ )
-			{
-				InOuter = CreatePackage( NULL, *Remaps(i) );
-				Result  = StaticLoadObject( ObjectClass, InOuter, InName, Filename, LoadFlags|LOAD_NoRemap, Sandbox );
-				if( Result )
-					return Result;
+			if( GObjPackageRemap ){
+				GObjPackageRemap->MultiFind(
+					InOuter->GetFName(),
+					Remaps
+				);
 			}
+
+			//GObjPackageRemap->MultiFind( InOuter->GetFName(), Remaps );
+			if( Remaps.Num() > 0 )
+				for( INT i=0; i<Remaps.Num(); i++ )
+				{
+					InOuter = CreatePackage( NULL, *Remaps(i) );
+					Result  = StaticLoadObject( ObjectClass, InOuter, InName, Filename, LoadFlags|LOAD_NoRemap, Sandbox );
+					if( Result )
+						return Result;
+				}
 		}
 		SafeLoadError( LoadFlags, Error, LocalizeError("FailedLoadObject"), ObjectClass->GetName(), InOuter ? InOuter->GetName() : TEXT("None"), InName, Error );
 	}
@@ -2304,8 +2367,11 @@ UClass* UObject::StaticLoadClass( UClass* BaseClass, UObject* InOuter, const TCH
 {
 	guard(UObject::StaticLoadClass);
 	check(BaseClass);
+	
+	//LOGI("REGISTER CLASS this=%p", this);
 	try
 	{
+
 		UClass* Class = LoadObject<UClass>( InOuter, InName, Filename, LoadFlags | LOAD_Throw, Sandbox );
 		if( Class && !Class->IsChildOf(BaseClass) )
 			appThrowf( LocalizeError("LoadClassMismatch"), Class->GetFullName(), BaseClass->GetFullName() );
@@ -2372,7 +2438,6 @@ void UObject::BeginLoad()
 	{
 		// Validate clean load state.
 		check(GObjLoaded.Num()==0);
-		check(!GAutoRegister);
 		for( INT i=0; i<GObjLoaders.Num(); i++ )
 			check(GetLoader(i)->Success);
 	}
@@ -2384,8 +2449,8 @@ void UObject::BeginLoad()
 //
 void UObject::EndLoad()
 {
-	guard(UObject::EndLoad);
-	check(GObjBeginLoadCount>0);
+	//guard(UObject::EndLoad);
+	//check(GObjBeginLoadCount>0);
 	if( --GObjBeginLoadCount == 0 )
 	{
 		try
@@ -2441,7 +2506,7 @@ void UObject::EndLoad()
 			appErrorf( Error );
 		}
 	}
-	unguard;
+	//unguard;
 }
 
 //
@@ -2497,6 +2562,7 @@ public:
 	FArchive& operator<<( UObject*& Obj )
 	{
 		guard(FArchiveSaveTagExports<<Obj);
+		LOGI("[SER] UObject ptr=%p", Obj);
 		if( Obj && Obj->IsIn(Parent) && !(Obj->GetFlags() & (RF_Transient|RF_TagExp)) )//&& !Obj->IsPendingKill() )
 		{
 			// Set flags.
@@ -2513,6 +2579,8 @@ public:
 			// Recurse with this object's children.
 			Obj->Serialize( *this );
 		}
+		LOGI("[SER] Post UObject ptr=%p", Obj);
+
 		return *this;
 		unguard;
 	}
@@ -2552,6 +2620,8 @@ public:
 	FArchive& operator<<( UObject*& Obj )
 	{
 		guard(FArchiveSaveTagImports<<Obj);
+		LOGI("[SER] UObject ptr=%p", Obj);
+
 		if( Obj && !Obj->IsPendingKill() )
 		{
 			if( !(Obj->GetFlags() & RF_Transient) || (Obj->GetFlags() & RF_Public) )
@@ -2569,6 +2639,9 @@ public:
 				}
 			}
 		}
+
+		LOGI("[SER] Post UObject ptr=%p", Obj);
+
 		return *this;
 		unguard;
 	}
@@ -3032,7 +3105,14 @@ void UObject::HashObject()
 
 	unguard;
 }
-
+void UObject::DebugLayout()
+{
+    LOGI("sizeof(UObject)=%d", sizeof(UObject));
+    LOGI("offsetof(Class)=%d", offsetof(UObject, Class));
+    LOGI("offsetof(Name)=%d", offsetof(UObject, Name));
+    LOGI("offsetof(Outer)=%d", offsetof(UObject, Outer));
+    LOGI("offsetof(_LinkerIndex)=%d", offsetof(UObject, _LinkerIndex));
+}
 //
 // Remove an object from the hash table.
 //
@@ -3338,6 +3418,8 @@ private:
 	FArchive& operator<<( UObject*& Obj )
 	{
 		guardSlow(FArchiveTagUsed<<Obj);
+		LOGI("[SER] UObject ptr=%p", Obj);
+
 		GGarbageRefCount++;
 
 #if DO_GUARD_SLOW
@@ -3375,6 +3457,8 @@ private:
 			}
 			unguardf(( TEXT("(%s)"), Obj->GetFullName() ));
 		}
+		LOGI("[SER] Post UObject ptr=%p", Obj);
+
 		return *this;
 		unguardSlow;
 	}
@@ -3519,6 +3603,11 @@ UBOOL UObject::AttemptDelete( UObject*& Obj, DWORD KeepFlags, UBOOL IgnoreRefere
 	}
 	else return 0;
 	unguard;
+}
+
+void UObject::DeferredRegister()
+{
+    GPendingRegistrants.AddItem(this);
 }
 
 /*-----------------------------------------------------------------------------

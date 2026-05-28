@@ -389,6 +389,7 @@ int main( int argc, char* argv[] )
 #endif
 
 	// Init engine.
+	//UObject::ProcessRegistrants();
 	UEngine* Engine = InitEngine();
 	if( Engine )
 	{

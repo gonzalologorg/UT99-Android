@@ -163,6 +163,32 @@ CORE_API UBOOL					GLazyLoad=0;					/* Whether TLazyLoad arrays should be lazy-l
 CORE_API FGlobalMath			GMath;							/* Math code */
 CORE_API URenderDevice*			GRenderDevice=NULL;				/* S3TC Support - Global pointer to current rendering device */
 CORE_API FArchive*				GDummySave=&GArchiveDummySave;	/* No-op save archive */
+CORE_API UBOOL 					GIsBootstrappingClassObject = 0;
+
+CORE_API thread_local const TCHAR* GGuardStack[256];
+CORE_API thread_local INT GGuardTop = 0;
+
+#undef appErrorf
+void appErrorf(const TCHAR* Fmt, ...)
+{
+	char Buffer[4096];
+
+	va_list ap;
+	va_start(ap, Fmt);
+	vsnprintf(Buffer, sizeof(Buffer), Fmt, ap);
+	va_end(ap);
+
+	__android_log_print(
+		ANDROID_LOG_ERROR,
+		"UE1",
+		"appError: %s",
+		Buffer
+	);
+
+	DumpGuardStack();
+
+	abort();
+}
 
 // Unicode.
 #if UNICODE

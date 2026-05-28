@@ -118,6 +118,7 @@ void FName::StaticInit()
 	guard(FName::StaticInit);
 	check(Initialized==0);
 	check((ARRAY_COUNT(NameHash)&(ARRAY_COUNT(NameHash)-1)) == 0);
+	LOGI("FName Initialized");
 	Initialized = 1;
 
 	// Init the name hash.
@@ -138,6 +139,8 @@ void FName::StaticInit()
 				if( appStricmp(Hash->Name,Other->Name)==0 )
 					appErrorf( TEXT("Name '%s' was duplicated"), Hash->Name );}
 
+	LOGI("Names.Num()=%d",
+    	Names.Num());
 	debugf( NAME_Init, TEXT("Name subsystem initialized") );
 	unguard;
 }
@@ -149,6 +152,11 @@ void FName::StaticExit()
 {
 	guard(FName::StaticExit);
 	check(Initialized);
+
+	if (!GIsRequestingExit){
+	    debugf( NAME_Exit, TEXT("GIsRequestingExit is false") );
+        return;
+    }
 
 	// Kill all names.
 	for( INT i=0; i<Names.Num(); i++ )

@@ -335,6 +335,7 @@ CORE_API extern UBOOL                   GScriptEntryTag;
 CORE_API extern UBOOL                   GLazyLoad;
 CORE_API extern UBOOL					GUnicode;
 CORE_API extern UBOOL					GUnicodeOS;
+CORE_API extern UBOOL					GIsBootstrappingClassObject;
 CORE_API extern class FGlobalMath		GMath;
 CORE_API extern	URenderDevice*			GRenderDevice;
 CORE_API extern class FArchive*         GDummySave;

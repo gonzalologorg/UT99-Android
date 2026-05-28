@@ -7,7 +7,10 @@
 =============================================================================*/
 
 #include "CorePrivate.h"
-
+#include <android/log.h>
+#define LOG_TAG "UNClass"
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  "UT99", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "UT99", __VA_ARGS__)
 #define VF_HASH_VARIABLES 0 /* Undecided!! */
 
 /*-----------------------------------------------------------------------------
@@ -34,7 +37,9 @@ struct FPropertyTag
 		FArchive& SaveAr;
 		FArchive& operator<<( UObject*& Obj )
 		{
+			LOGI("[SER] UObject ptr=%p", Obj);
 			INT Index = SaveAr.MapObject(Obj);
+			LOGI("[SER] Post UObject ptr=%p", Obj);
 			return *this << AR_INDEX(Index);
 		}
 		FArchive& operator<<( FName& Name )
@@ -263,6 +268,11 @@ void UField::AddCppProperty( UProperty* Property )
 }
 void UField::Register()
 {
+	if (GIsRegistering)
+    	LOGI("Registering object %p", this);
+	else
+		LOGI("Registering %s", GetName());
+
 	guard(UField::Register);
 	Super::Register();
 	if( SuperField )
@@ -315,6 +325,10 @@ void UStruct::AddCppProperty( UProperty* Property )
 //
 void UStruct::Register()
 {
+	if (GIsRegistering)
+    	LOGI("Registering object %p", this);
+	else
+		LOGI("Registering %s", GetName());
 	guard(UStruct::Register);
 	Super::Register();
 
@@ -756,11 +770,15 @@ IMPLEMENT_CLASS(UState);
 //
 void UClass::Register()
 {
+	if (GIsRegistering)
+    	LOGI("Registering object %p", this);
+	else
+		LOGI("Registering %s", GetName());
 	guard(UClass::Register);
 	Super::Register();
 
 	// Get stashed registration info.
-	const TCHAR* InClassConfigName = *(TCHAR**)&ClassConfigName;
+	const TCHAR* InClassConfigName = *ClassConfigName;
 	ClassConfigName = InClassConfigName;
 
 	// Init default object.
@@ -968,7 +986,7 @@ void UClass::Serialize( FArchive& Ar )
 //
 UClass::UClass()
 :	ClassWithin( UObject::StaticClass() )
-{}
+{ }
 
 //
 // Create a new UClass given its superclass.
@@ -978,6 +996,7 @@ UClass::UClass( UClass* InBaseClass )
 ,	ClassWithin( UObject::StaticClass() )
 {
 	guard(UClass::UClass);
+
 	if( GetSuperClass() )
 	{
 		ClassWithin = GetSuperClass()->ClassWithin;
@@ -1019,7 +1038,13 @@ UClass::UClass
 ,	ClassConstructor		( InClassConstructor )
 ,	ClassStaticConstructor	( InClassStaticConstructor )
 {
-	*(const TCHAR**)&ClassConfigName = InConfigName;
+	//*(const TCHAR**)&ClassConfigName = InConfigName;
+	
+	LOGI("Constructing UClass %s", InNameStr);
+	LOGI("InSuperClass=%p", InSuperClass);
+	LOGI("InWithinClass=%p", InWithinClass);
+
+	ClassConfigName = FName(InConfigName);
 }
 
 IMPLEMENT_CLASS(UClass);

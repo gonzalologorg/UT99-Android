@@ -529,14 +529,31 @@ template <class T> T* FindField( UStruct* Owner, const TCHAR* FieldName )
 //
 // See if this object belongs to the specified class.
 //
-inline UBOOL UObject::IsA( class UClass* SomeBase ) const
+inline UBOOL UObject::IsA(UClass* SomeBase) const
 {
-	guardSlow(UObject::IsA);
-	for( UClass* TempClass=Class; TempClass; TempClass=(UClass*)TempClass->SuperField )
-		if( TempClass==SomeBase )
-			return 1;
-	return SomeBase==NULL;
-	unguardobjSlow;
+    guardSlow(UObject::IsA);
+
+    UClass* TempClass = Class;
+    INT Depth = 0;
+
+    while (TempClass)
+    {
+        if (TempClass == SomeBase)
+            return 1;
+
+        TempClass =
+            (UClass*)TempClass->SuperField;
+        Depth++;
+
+        if (Depth > 64)
+        {
+            LOGE("Infinite class hierarchy?");
+            break;
+        }
+    }
+
+    return SomeBase == NULL;
+    unguardobjSlow;
 }
 
 //

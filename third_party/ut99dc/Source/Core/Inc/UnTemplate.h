@@ -9,7 +9,10 @@
 /*-----------------------------------------------------------------------------
 	Type information.
 -----------------------------------------------------------------------------*/
-
+#include <android/log.h>
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "UT99", __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  "UT99", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "UT99", __VA_ARGS__)
 //
 // Type information for initialization.
 //
@@ -1461,10 +1464,33 @@ public:
 	TI& Set( typename TTypeInfo<TK>::ConstInitType InKey, typename TTypeInfo<TI>::ConstInitType InValue )
 	{
 		guardSlow(TMap::Set);
-		for( INT i=Hash[(GetTypeHash(InKey) & (HashCount-1))]; i!=INDEX_NONE; i=Pairs(i).HashNext )
-			if( Pairs(i).Key==InKey )
-				{Pairs(i).Value=InValue; return Pairs(i).Value;}
-		return Add( InKey, InValue );
+		DWORD HashValue = GetTypeHash(InKey);
+		DWORD Bucket =
+			(HashValue & (HashCount - 1));
+		INT StartIndex = Hash[Bucket];
+
+		for (
+			INT i = StartIndex;
+			i != INDEX_NONE;
+			)
+		{
+			if (i < 0 || i >= Pairs.Num())
+			{
+				LOGE("INVALID i=%d", i);
+				break;
+			}
+
+			if (Pairs(i).Key == InKey)
+			{
+				Pairs(i).Value = InValue;
+				return Pairs(i).Value;
+			}
+
+			i = Pairs(i).HashNext;
+		}
+
+		return Add(InKey, InValue);
+
 		unguardSlow;
 	}
 	INT Remove( typename TTypeInfo<TK>::ConstInitType InKey )
@@ -1563,9 +1589,21 @@ public:
 	void MultiFind( const TK& Key, TArray<TI>& Values ) 
 	{
 		guardSlow(TMap::MultiFind);
-		for( INT i=this->Hash[(GetTypeHash(Key) & (this->HashCount-1))]; i!=INDEX_NONE; i=this->Pairs(i).HashNext )
+
+		if( !this->Hash || this->HashCount <= 0 )
+			return;
+
+		for
+		(
+			INT i=this->Hash[(GetTypeHash(Key) & (this->HashCount-1))];
+			i!=INDEX_NONE;
+			i=this->Pairs(i).HashNext
+		)
+		{
 			if( this->Pairs(i).Key==Key )
 				new(Values)TI(this->Pairs(i).Value);
+		}
+
 		unguardSlow;
 	}
 	TI& Add( typename TTypeInfo<TK>::ConstInitType InKey, typename TTypeInfo<TI>::ConstInitType InValue )

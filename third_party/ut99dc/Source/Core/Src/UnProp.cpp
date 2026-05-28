@@ -624,6 +624,8 @@ void UFloatProperty::ExportTextItem( TCHAR* ValueStr, BYTE* PropertyValue, BYTE*
 }
 const TCHAR* UFloatProperty::ImportText( const TCHAR* Buffer, BYTE* Data, INT PortFlags ) const
 {
+	LOGI("UFloatProperty ctor");
+	//LOGI("FName ready=%d", FName::Initialized);
 	guard(UFloatProperty::ImportText);
 	*(FLOAT*)Data = appAtof(Buffer);
 	while( *Buffer && *Buffer!=',' && *Buffer!=')' && *Buffer!=13 && *Buffer!=10 )

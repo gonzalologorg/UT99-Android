@@ -81,6 +81,8 @@ public:
 		// 				: "NULL");
 		// 	}
 		// }
+		if (!Initialized || Names.Num() == 0)
+    		return TEXT("FNameBooting");
 		
 		checkName(Index < Names.Num());
 		checkName(Names(Index));
@@ -142,10 +144,11 @@ public:
 	// Name subsystem accessors.
 	static const TCHAR* SafeString( EName Index )
 	{
-		if (!Initialized)
-		{
+		if (GIsRequestingExit)
+			return TEXT("Shutdown");
+
+		if (!Initialized || Names.Num() == 0)
 			return TEXT("Uninitialized");
-		}
 
 		if ((INT)Index < 0 || (INT)Index >= Names.Num())
 		{
