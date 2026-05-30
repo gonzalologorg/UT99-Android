@@ -11,6 +11,56 @@
 // Parameters.
 #define SPRITE_PROJECTION_FORWARD 32.f /* Move sprite projection planes forward */
 
+static UBOOL IsKnownRenderObject( UObject* Object )
+{
+	guardSlow(IsKnownRenderObject);
+	if( !Object )
+		return 1;
+	for( FObjectIterator It; It; ++It )
+		if( *It == Object )
+			return 1;
+	return 0;
+	unguardSlow;
+}
+
+static UBOOL ValidateRenderObject( AActor* Actor, UObject* Object, const TCHAR* Field, const TCHAR* Context )
+{
+	guardSlow(ValidateRenderObject);
+	if( IsKnownRenderObject( Object ) )
+		return 1;
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V183_BAD_RENDER_OBJECT context=%s actor=%s field=%s object=%p drawType=%i texture=%p sprite=%p mesh=%p skin=%p regionZone=%p"),
+		Context,
+		Actor ? Actor->GetFullName() : TEXT("None"),
+		Field,
+		Object,
+		Actor ? Actor->DrawType : -1,
+		Actor ? Actor->Texture : NULL,
+		Actor ? Actor->Sprite : NULL,
+		Actor ? Actor->Mesh : NULL,
+		Actor ? Actor->Skin : NULL,
+		Actor ? Actor->Region.Zone : NULL );
+	return 0;
+	unguardSlow;
+}
+
+static void SanitizeActorRenderRefs( AActor* Actor, const TCHAR* Context )
+{
+	guardSlow(SanitizeActorRenderRefs);
+	if( !Actor )
+		return;
+	if( !ValidateRenderObject( Actor, Actor->Texture, TEXT("Texture"), Context ) )
+		Actor->Texture = NULL;
+	if( !ValidateRenderObject( Actor, Actor->Sprite, TEXT("Sprite"), Context ) )
+		Actor->Sprite = NULL;
+	if( !ValidateRenderObject( Actor, Actor->Mesh, TEXT("Mesh"), Context ) )
+		Actor->Mesh = NULL;
+	if( !ValidateRenderObject( Actor, Actor->Skin, TEXT("Skin"), Context ) )
+		Actor->Skin = NULL;
+	if( !ValidateRenderObject( Actor, Actor->Region.Zone, TEXT("Region.Zone"), Context ) )
+		Actor->Region.Zone = Actor->XLevel ? Actor->XLevel->GetZoneActor(0) : NULL;
+	unguardSlow;
+}
+
 /*------------------------------------------------------------------------------
 	Dynamics setup and rendering.
 ------------------------------------------------------------------------------*/
@@ -56,6 +106,7 @@ void URender::SetupDynamics( FSceneNode* Frame, AActor* Exclude )
 				// Add the sprite proxy.
 				if( !Actor->IsMovingBrush() )
 				{
+					SanitizeActorRenderRefs( Actor, TEXT("SetupDynamics") );
 #if defined(LEGEND) //LEGEND
 if( GIsRunning ) //!!Tim -- don't render until after the engine is fully initialized.
 {
@@ -220,6 +271,7 @@ UBOOL FDynamicSprite::Setup( FSceneNode* Frame )
 	if( Actor->DrawType==DT_Sprite || Actor->DrawType==DT_SpriteAnimOnce||  (Frame->Viewport->Actor->ShowFlags & SHOW_ActorIcons) )
 	{
 		// Make sure we have something to draw.
+		SanitizeActorRenderRefs( Actor, TEXT("FDynamicSprite.Sprite") );
 		FLOAT     DrawScale = Actor->DrawScale;
 		UTexture* Texture   = Actor->Texture;
 
@@ -290,6 +342,7 @@ UBOOL FDynamicSprite::Setup( FSceneNode* Frame )
 	}
 	else if( Actor->DrawType==DT_Mesh )
 	{
+		SanitizeActorRenderRefs( Actor, TEXT("FDynamicSprite.Mesh") );
 		// Verify mesh.
 		if( !Actor->Mesh )
 			return 0;

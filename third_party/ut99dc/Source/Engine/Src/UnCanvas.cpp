@@ -10,6 +10,28 @@ Revision history:
 #include "EnginePrivate.h"
 #include "UnRender.h"
 
+static UBOOL IsKnownCanvasObject( UObject* Object )
+{
+	guardSlow(IsKnownCanvasObject);
+	if( !Object )
+		return 1;
+	for( FObjectIterator It; It; ++It )
+		if( *It == Object )
+			return 1;
+	return 0;
+	unguardSlow;
+}
+
+static UBOOL ValidateCanvasTexture( UTexture* Texture, const TCHAR* Context )
+{
+	guardSlow(ValidateCanvasTexture);
+	if( IsKnownCanvasObject( Texture ) )
+		return 1;
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V186_BAD_CANVAS_TEXTURE context=%s texture=%p"), Context, Texture );
+	return 0;
+	unguardSlow;
+}
+
 /*-----------------------------------------------------------------------------
 	UCanvas scaled sprites.
 -----------------------------------------------------------------------------*/
@@ -37,6 +59,8 @@ void UCanvas::DrawTile
 {
 	guard(UCanvas::DrawTile);
 	check(Texture);
+	if( !ValidateCanvasTexture( Texture, TEXT("DrawTile") ) )
+		return;
 
 	// Compute clipping region.
 	FLOAT ClipY0 = /*SpanBuffer ? SpanBuffer->StartY :*/ 0;
@@ -60,6 +84,8 @@ void UCanvas::DrawTile
 	FTextureInfo Info;
 	if( !GIsEditor )
 		Texture = Texture->Get( Viewport->CurrentTime );
+	if( !ValidateCanvasTexture( Texture, TEXT("DrawTile.Get") ) )
+		return;
 	Texture->Lock( Info, Viewport->CurrentTime, -1, Viewport->RenDev );
 	FLOAT UF = Info.UScale * Info.USize / Texture->USize; U *= UF; UL *= UF;
 	FLOAT VF = Info.VScale * Info.VSize / Texture->VSize; V *= VF; VL *= VF;
@@ -234,6 +260,11 @@ static inline INT DrawString
 		UTexture* Tex;
 		if( NewPage<Font->Pages.Num() && (Tex=Font->Pages(NewPage).Texture)!=NULL )
 		{
+			if( !ValidateCanvasTexture( Tex, TEXT("DrawString.FontPage") ) )
+			{
+				Font->Pages(NewPage).Texture = NULL;
+				continue;
+			}
 			INT        Index    = Ch - NewPage*Font->CharactersPerPage;
 			FFontPage& PageInfo = Font->Pages(NewPage);
 			if( Index<PageInfo.Characters.Num() )
@@ -333,6 +364,11 @@ void VARARGS UCanvas::WrappedPrint( ERenderStyle Style, INT& XL, INT& YL, UFont*
 	if( (Font==LargeFont || Font==BigFont) && appStricmp(UObject::GetLanguage(),TEXT("INT")) )
 		Font = MedFont;//BigFont;!!
 	check(Font);
+	if( !IsKnownCanvasObject( Font ) || Font->CharactersPerPage <= 0 )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V186_BAD_CANVAS_FONT font=%p charsPerPage=%i"), Font, Font ? Font->CharactersPerPage : 0 );
+		return;
+	}
 	FPlane DrawColor = Color.Plane();
 
 	// Generate flags.

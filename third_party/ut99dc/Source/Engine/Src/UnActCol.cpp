@@ -12,6 +12,53 @@ Revision history:
 
 #include "EnginePrivate.h"
 
+static UBOOL IsKnownCollisionPrimitive( UPrimitive* Primitive )
+{
+	guard(IsKnownCollisionPrimitive);
+	if( !Primitive )
+		return 0;
+	for( TObjectIterator<UPrimitive> It; It; ++It )
+		if( *It == Primitive )
+			return 1;
+	return 0;
+	unguard;
+}
+
+static UPrimitive* ResolveCollisionPrimitive( AActor* Actor, const TCHAR* Context )
+{
+	guard(ResolveCollisionPrimitive);
+	if( !Actor )
+		return NULL;
+
+	UPrimitive* Primitive = Actor->GetPrimitive();
+	if( IsKnownCollisionPrimitive( Primitive ) )
+		return Primitive;
+
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V181_BAD_COLLISION_PRIMITIVE context=%s actor=%s primitive=%p brush=%p mesh=%p sprite=%p drawType=%i collide=%i blockA=%i blockP=%i radius=%f height=%f level=%p xlevel=%p"),
+		Context,
+		Actor->GetFullName(),
+		Primitive,
+		Actor->Brush,
+		Actor->Mesh,
+		Actor->Sprite,
+		Actor->DrawType,
+		Actor->bCollideActors,
+		Actor->bBlockActors,
+		Actor->bBlockPlayers,
+		Actor->CollisionRadius,
+		Actor->CollisionHeight,
+		Actor->Level,
+		Actor->XLevel );
+
+	if( (UPrimitive*)Actor->Brush == Primitive )
+		Actor->Brush = NULL;
+	if( (UPrimitive*)Actor->Mesh == Primitive )
+		Actor->Mesh = NULL;
+
+	return Actor->GetLevel() ? Actor->GetLevel()->Engine->Cylinder : NULL;
+	unguard;
+}
+
 /*-----------------------------------------------------------------------------
 	FCollisionHash.
 -----------------------------------------------------------------------------*/
@@ -187,7 +234,9 @@ void FCollisionHash::GetActorExtent
 	guard(FCollisionHash::GetActorExtent);
 
 	// Get actor's bounding box.
-	FBox Box = Actor->GetPrimitive()->GetCollisionBoundingBox( Actor );
+	UPrimitive* Primitive = ResolveCollisionPrimitive( Actor, TEXT("GetActorExtent") );
+	check(Primitive);
+	FBox Box = Primitive->GetCollisionBoundingBox( Actor );
 
 	// Discretize to hash coordinates.
 	GetHashIndices( Box.Min, X0, Y0, Z0 );
@@ -350,7 +399,8 @@ FCheckResult* FCollisionHash::ActorPointCheck
 				// Collision test.
 				Link->Actor->CollisionTag = CollisionTag;
 				FCheckResult TestHit(1.0);
-				if( Link->Actor->GetPrimitive()->PointCheck( TestHit, Link->Actor, Location, Extent, 0 )==0 )
+				UPrimitive* Primitive = ResolveCollisionPrimitive( Link->Actor, TEXT("ActorPointCheck") );
+				if( Primitive && Primitive->PointCheck( TestHit, Link->Actor, Location, Extent, 0 )==0 )
 				{
 					check(TestHit.Actor==Link->Actor);
 					FCheckResult* New = new(GMem)FCheckResult;
@@ -451,10 +501,12 @@ FCheckResult* FCollisionHash::ActorEncroachmentCheck
 			{
 				Link->Actor->CollisionTag = CollisionTag;
 				FCheckResult TestHit(1.0);
+				UPrimitive* Primitive = ResolveCollisionPrimitive( Actor, TEXT("ActorEncroachmentCheck") );
 				if
 				(	!Link->Actor->IsMovingBrush()
 				&&	Link->Actor!=Actor
-				&&	Actor->GetPrimitive()->PointCheck( TestHit, Actor, Link->Actor->Location, Link->Actor->GetCylinderExtent(), 0 )==0 )
+				&&	Primitive
+				&&	Primitive->PointCheck( TestHit, Actor, Link->Actor->Location, Link->Actor->GetCylinderExtent(), 0 )==0 )
 				{
 					TestHit.Actor     = Link->Actor;
 					TestHit.Primitive = NULL;
@@ -531,7 +583,8 @@ FCheckResult* FCollisionHash::ActorLineCheck
 						// Check collision.
 						FCheckResult Hit(0);
 						Link->Actor->CollisionTag = CollisionTag;
-						if( Link->Actor->GetPrimitive()->LineCheck( Hit, Link->Actor, End, Start, Size, ExtraNodeFlags )==0 )
+						UPrimitive* Primitive = ResolveCollisionPrimitive( Link->Actor, TEXT("ActorLineCheck") );
+						if( Primitive && Primitive->LineCheck( Hit, Link->Actor, End, Start, Size, ExtraNodeFlags )==0 )
 						{
 							FCheckResult* Link = new(Mem)FCheckResult(Hit);
 							Link->GetNext() = Result;

@@ -1088,7 +1088,21 @@ void UClass::Serialize( FArchive& Ar )
 	}
 	else
 	{
-		check(Defaults.Num()==GetPropertiesSize());
+		if( Defaults.Num()!=GetPropertiesSize() )
+		{
+			debugf
+			(
+				NAME_Warning,
+				TEXT("UT99_ANDROID_V161_DEFAULTS_RESIZE class=%s defaults=%i props=%i"),
+				GetFullName(),
+				Defaults.Num(),
+				GetPropertiesSize()
+			);
+			if( Defaults.Num()<GetPropertiesSize() )
+				Defaults.AddZeroed( GetPropertiesSize()-Defaults.Num() );
+			else
+				Defaults.Remove( GetPropertiesSize(), Defaults.Num()-GetPropertiesSize() );
+		}
 		Defaults.CountBytes( Ar );
 		SerializeBin( Ar, &Defaults(0) );
 	}
@@ -1237,7 +1251,7 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 	#ifdef PLATFORM_DREAMCAST
 	#define XFER(T) {XferAligned(Ar, (T*)&Script(iCode)); iCode += sizeof(T);}
 	#else
-	#define XFER(T) {INT CompatBytes=ScriptCompatSize((T*)NULL); if(Ar.IsLoading() && GScriptCompatCodeOffset && GScriptCompatCodeLimit && *GScriptCompatCodeOffset+CompatBytes>*GScriptCompatCodeLimit) appErrorf(TEXT("SerializeExpr read past script object=%s nativeCode=%i compatCode=%i read=%i limit=%i scriptBytes=%i"), GetFullName(), iCode, *GScriptCompatCodeOffset, CompatBytes, *GScriptCompatCodeLimit, Script.Num()); if(Ar.IsLoading() && iCode+(INT)sizeof(T)>Script.Num()) Script.AddZeroed(iCode+(INT)sizeof(T)-Script.Num()); if(!Ar.IsLoading() && iCode+(INT)sizeof(T)>Script.Num()) appErrorf(TEXT("SerializeExpr read past native script object=%s nativeCode=%i read=%i scriptBytes=%i"), GetFullName(), iCode, (INT)sizeof(T), Script.Num()); Ar << *(T*)&Script(iCode); if(GScriptCompatCodeOffset) {*GScriptCompatCodeOffset += CompatBytes; NoteScriptCompatOffset(*GScriptCompatCodeOffset, iCode+(INT)sizeof(T));} iCode += sizeof(T); }
+	#define XFER(T) {INT CompatBytes=ScriptCompatSize((T*)NULL); if(Ar.IsLoading() && GScriptCompatCodeOffset && GScriptCompatCodeLimit && *GScriptCompatCodeOffset+CompatBytes>*GScriptCompatCodeLimit) appErrorf(TEXT("SerializeExpr read past script object=%s nativeCode=%i compatCode=%i read=%i limit=%i scriptBytes=%i"), GetFullName(), iCode, *GScriptCompatCodeOffset, CompatBytes, *GScriptCompatCodeLimit, Script.Num()); if(iCode+(INT)sizeof(T)>Script.Num()) { debugf(NAME_Warning,TEXT("UT99_ANDROID_V188_SCRIPT_PAD_READ object=%s nativeCode=%i compatCode=%i read=%i scriptBytes=%i loading=%i saving=%i"),GetFullName(),iCode,GScriptCompatCodeOffset?*GScriptCompatCodeOffset:iCode,(INT)sizeof(T),Script.Num(),Ar.IsLoading(),Ar.IsSaving()); Script.AddZeroed(iCode+(INT)sizeof(T)-Script.Num()); } Ar << *(T*)&Script(iCode); if(GScriptCompatCodeOffset) {*GScriptCompatCodeOffset += CompatBytes; NoteScriptCompatOffset(*GScriptCompatCodeOffset, iCode+(INT)sizeof(T));} iCode += sizeof(T); }
 	#endif
 
 	// Get expr token.
@@ -1266,6 +1280,20 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		}
 		else if( Ar.IsLoading() && StartCode == Script.Num() )
 		{
+			GScriptSerializeExprDepth--;
+			return EX_EndFunctionParms;
+		}
+		else if( !Ar.IsLoading() && !Ar.IsSaving() )
+		{
+			debugf
+			(
+				NAME_Warning,
+				TEXT("UT99_ANDROID_V174_SCRIPT_EOF_WALK object=%s nativeCode=%i compatCode=%i scriptBytes=%i"),
+				GetFullName(),
+				StartCode,
+				StartCompatCode,
+				Script.Num()
+			);
 			GScriptSerializeExprDepth--;
 			return EX_EndFunctionParms;
 		}
@@ -1588,7 +1616,48 @@ EExprToken UStruct::SerializeExpr( INT& iCode, FArchive& Ar )
 		default:
 		{
 			// This should never occur.
-			appErrorf( TEXT("Bad expr token %02x"), Expr );
+			BYTE B0 = StartCode+0 < Script.Num() ? Script(StartCode+0) : 0;
+			BYTE B1 = StartCode+1 < Script.Num() ? Script(StartCode+1) : 0;
+			BYTE B2 = StartCode+2 < Script.Num() ? Script(StartCode+2) : 0;
+			BYTE B3 = StartCode+3 < Script.Num() ? Script(StartCode+3) : 0;
+			BYTE P1 = StartCode-1 >= 0 && StartCode-1 < Script.Num() ? Script(StartCode-1) : 0;
+			BYTE P2 = StartCode-2 >= 0 && StartCode-2 < Script.Num() ? Script(StartCode-2) : 0;
+			if( !Ar.IsLoading() && !Ar.IsSaving() )
+			{
+				debugf
+				(
+					NAME_Warning,
+					TEXT("UT99_ANDROID_V175_SCRIPT_BAD_TOKEN_WALK token=%02x object=%s nativeCode=%i compatCode=%i prev=%02x %02x bytes=%02x %02x %02x %02x scriptBytes=%i"),
+					Expr,
+					GetFullName(),
+					StartCode,
+					StartCompatCode,
+					P2,
+					P1,
+					B0,
+					B1,
+					B2,
+					B3,
+					Script.Num()
+				);
+				Expr = EX_EndFunctionParms;
+				break;
+			}
+			appErrorf
+			(
+				TEXT("Bad expr token %02x object=%s nativeCode=%i compatCode=%i prev=%02x %02x bytes=%02x %02x %02x %02x scriptBytes=%i"),
+				Expr,
+				GetFullName(),
+				StartCode,
+				StartCompatCode,
+				P2,
+				P1,
+				B0,
+				B1,
+				B2,
+				B3,
+				Script.Num()
+			);
 			break;
 		}
 	}

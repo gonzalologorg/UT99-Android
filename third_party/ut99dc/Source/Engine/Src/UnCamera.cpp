@@ -260,6 +260,59 @@ void FSceneNode::ComputeRenderCoords( FVector& Location, FRotator& Rotation )
 	:								           GMath.ViewCoords / Rotation) / Location;
 	Uncoords = Coords.Transpose();
 	ComputeRenderSize();
+#if PLATFORM_ANDROID
+	static INT AndroidFrameCoordsLogs = 0;
+	if( AndroidFrameCoordsLogs++ < 16 || (AndroidFrameCoordsLogs % 60) == 0 )
+	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V193_FRAME_COORDS count=%i loc=%f,%f,%f rot=%i,%i,%i rend=%i fov=%f size=%ix%i coordsO=%f,%f,%f x=%f,%f,%f y=%f,%f,%f z=%f,%f,%f unx=%f,%f,%f uny=%f,%f,%f unz=%f,%f,%f proj=%f,%f,%f rproj=%f,%f,%f prj=%f,%f,%f,%f fx=%f,%f,%f,%f"),
+			AndroidFrameCoordsLogs,
+			Location.X,
+			Location.Y,
+			Location.Z,
+			Rotation.Pitch,
+			Rotation.Yaw,
+			Rotation.Roll,
+			Viewport->Actor->RendMap,
+			Viewport->Actor->FovAngle,
+			X,
+			Y,
+			Coords.Origin.X,
+			Coords.Origin.Y,
+			Coords.Origin.Z,
+			Coords.XAxis.X,
+			Coords.XAxis.Y,
+			Coords.XAxis.Z,
+			Coords.YAxis.X,
+			Coords.YAxis.Y,
+			Coords.YAxis.Z,
+			Coords.ZAxis.X,
+			Coords.ZAxis.Y,
+			Coords.ZAxis.Z,
+			Uncoords.XAxis.X,
+			Uncoords.XAxis.Y,
+			Uncoords.XAxis.Z,
+			Uncoords.YAxis.X,
+			Uncoords.YAxis.Y,
+			Uncoords.YAxis.Z,
+			Uncoords.ZAxis.X,
+			Uncoords.ZAxis.Y,
+			Uncoords.ZAxis.Z,
+			Proj.X,
+			Proj.Y,
+			Proj.Z,
+			RProj.X,
+			RProj.Y,
+			RProj.Z,
+			PrjXM,
+			PrjXP,
+			PrjYM,
+			PrjYP,
+			FX2,
+			FY2,
+			FX15,
+			FY15 );
+	}
+#endif
 	unguard;
 }
 
@@ -277,7 +330,18 @@ void FSceneNode::ComputeRenderSize()
 	FY2			= FY * 0.5;	
 	FX15		= (FX+1.0001) * 0.5;
 	FY15		= (FY+1.0001) * 0.5;	
-	Proj		= FVector( 0.5-0.5*FX, 0.5-0.5*FY, 0.5*FX / appTan(Viewport->Actor->FovAngle * PI/360.0) );
+	FLOAT FovAngle = Viewport->Actor->FovAngle;
+#if PLATFORM_ANDROID
+	if( appIsNan(FovAngle) || FovAngle < 1.0f || FovAngle > 170.0f )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V194_BAD_FOV actor=%s fov=%f defaulting=90.000000"),
+			Viewport->Actor->GetFullName(),
+			FovAngle );
+		FovAngle = 90.0f;
+		Viewport->Actor->FovAngle = FovAngle;
+	}
+#endif
+	Proj		= FVector( 0.5-0.5*FX, 0.5-0.5*FY, 0.5*FX / appTan(FovAngle * PI/360.0) );
 	RProj		= FVector( 1/Proj.X, 1/Proj.Y, 1/Proj.Z );
 	Zoom 		= Viewport->Actor->OrthoZoom / (FX * 15.0);
 	PrjXM		= (0  - FX2)*(-RProj.Z);

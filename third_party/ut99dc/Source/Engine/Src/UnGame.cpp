@@ -16,6 +16,207 @@
 
 IMPLEMENT_CLASS(UGameEngine);
 
+static void MigrateNativePropertyDefaults( UClass* Class, UProperty* Property, INT OldOffset, INT NewOffset )
+{
+	guard(MigrateNativePropertyDefaults);
+	if( !Class || !Property || OldOffset==NewOffset )
+		return;
+	INT Size = Property->GetSize();
+	for( TObjectIterator<UClass> It; It; ++It )
+	{
+		UClass* TestClass = *It;
+		if( !TestClass->IsChildOf( Class ) || !TestClass->Defaults.Num() )
+			continue;
+		if( OldOffset<0 || NewOffset<0 || OldOffset+Size>TestClass->Defaults.Num() || NewOffset+Size>TestClass->Defaults.Num() )
+			continue;
+		appMemcpy( &TestClass->Defaults(NewOffset), &TestClass->Defaults(OldOffset), Size );
+		appMemzero( &TestClass->Defaults(OldOffset), Size );
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V180_DEFAULT_OFFSET_MIGRATE class=%s property=%s old=%i native=%i size=%i"),
+			TestClass->GetFullName(),
+			Property->GetFullName(),
+			OldOffset,
+			NewOffset,
+			Size );
+	}
+	unguard;
+}
+
+static void MigrateNativeDefaultBytes( UClass* Class, const TCHAR* Label, INT OldOffset, INT NewOffset, INT Size )
+{
+	guard(MigrateNativeDefaultBytes);
+	if( !Class || OldOffset==NewOffset )
+		return;
+	for( TObjectIterator<UClass> It; It; ++It )
+	{
+		UClass* TestClass = *It;
+		if( !TestClass->IsChildOf( Class ) || !TestClass->Defaults.Num() )
+			continue;
+		if( OldOffset<0 || NewOffset<0 || OldOffset+Size>TestClass->Defaults.Num() || NewOffset+Size>TestClass->Defaults.Num() )
+			continue;
+		appMemcpy( &TestClass->Defaults(NewOffset), &TestClass->Defaults(OldOffset), Size );
+		appMemzero( &TestClass->Defaults(OldOffset), Size );
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V181_DEFAULT_BLOCK_MIGRATE class=%s block=%s old=%i native=%i size=%i"),
+			TestClass->GetFullName(),
+			Label,
+			OldOffset,
+			NewOffset,
+			Size );
+	}
+	unguard;
+}
+
+static UProperty* FindNativeProperty( UClass* Class, const TCHAR* Name )
+{
+	guard(FindNativeProperty);
+	if( !Class )
+		return NULL;
+	for( TFieldIterator<UProperty> It(Class); It; ++It )
+		if( appStricmp( It->GetName(), Name )==0 )
+			return *It;
+	return NULL;
+	unguard;
+}
+
+static void FixupNativePropertyOffset( UClass* Class, const TCHAR* Name, INT Offset )
+{
+	guard(FixupNativePropertyOffset);
+	if( !Class )
+		return;
+	for( TFieldIterator<UProperty> It(Class); It; ++It )
+	{
+		if( appStricmp( It->GetName(), Name )==0 )
+		{
+			if( It->Offset != Offset )
+			{
+				debugf( NAME_Warning, TEXT("UT99_ANDROID_V177_NATIVE_OFFSET_FIX class=%s property=%s script=%i native=%i"), Class->GetFullName(), Name, It->Offset, Offset );
+				MigrateNativePropertyDefaults( Class, *It, It->Offset, Offset );
+				It->Offset = Offset;
+			}
+			return;
+		}
+	}
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V177_NATIVE_OFFSET_MISSING class=%s property=%s native=%i"), Class->GetFullName(), Name, Offset );
+	unguard;
+}
+
+static void FixupNativeBoolBlockOffset( UClass* Class, const TCHAR* Label, const TCHAR** Names, INT Count, INT Offset )
+{
+	guard(FixupNativeBoolBlockOffset);
+	if( !Class || !Names || Count<=0 )
+		return;
+
+	UProperty* First = FindNativeProperty( Class, Names[0] );
+	if( First && First->Offset != Offset )
+		MigrateNativeDefaultBytes( Class, Label, First->Offset, Offset, sizeof(BITFIELD) );
+
+	for( INT i=0; i<Count; i++ )
+	{
+		UProperty* Property = FindNativeProperty( Class, Names[i] );
+		if( !Property )
+		{
+			debugf( NAME_Warning, TEXT("UT99_ANDROID_V181_BOOL_OFFSET_MISSING class=%s block=%s property=%s native=%i"),
+				Class->GetFullName(),
+				Label,
+				Names[i],
+				Offset );
+			continue;
+		}
+		if( Property->Offset != Offset )
+		{
+			debugf( NAME_Warning, TEXT("UT99_ANDROID_V181_BOOL_OFFSET_FIX class=%s block=%s property=%s script=%i native=%i"),
+				Class->GetFullName(),
+				Label,
+				Names[i],
+				Property->Offset,
+				Offset );
+			Property->Offset = Offset;
+		}
+	}
+	unguard;
+}
+
+static void FixupCriticalNativeOffsets()
+{
+#if defined(PLATFORM_64BIT)
+	guard(FixupCriticalNativeOffsets);
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Level"), STRUCT_OFFSET(AActor,Level) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("XLevel"), STRUCT_OFFSET(AActor,XLevel) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Owner"), STRUCT_OFFSET(AActor,Owner) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Instigator"), STRUCT_OFFSET(AActor,Instigator) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Base"), STRUCT_OFFSET(AActor,Base) );
+	static const TCHAR* ActorCoreBools[] =
+	{
+		TEXT("bStatic"), TEXT("bHidden"), TEXT("bNoDelete"), TEXT("bAnimFinished"), TEXT("bAnimLoop"), TEXT("bAnimNotify"),
+		TEXT("bAnimByOwner"), TEXT("bDeleteMe"), TEXT("bAssimilated"), TEXT("bTicked"), TEXT("bLightChanged"),
+		TEXT("bDynamicLight"), TEXT("bTimerLoop"), TEXT("bCanTeleport"), TEXT("bIsSecretGoal"), TEXT("bIsKillGoal"),
+		TEXT("bIsItemGoal"), TEXT("bCollideWhenPlacing"), TEXT("bTravel"), TEXT("bMovable"), TEXT("bHighDetail"),
+		TEXT("bStasis"), TEXT("bForceStasis"), TEXT("bIsPawn"), TEXT("bNetTemporary"), TEXT("bNetOptional"),
+		TEXT("bReplicateInstigator"), TEXT("bTrailerSameRotation"), TEXT("bTrailerPrePivot"), TEXT("bClientAnim"), TEXT("bSimFall")
+	};
+	static const TCHAR* ActorEditorBools[] =
+	{
+		TEXT("bHiddenEd"), TEXT("bDirectional"), TEXT("bSelected"), TEXT("bMemorized"), TEXT("bHighlighted"),
+		TEXT("bEdLocked"), TEXT("bEdShouldSnap"), TEXT("bEdSnap"), TEXT("bTempEditor"), TEXT("bDifficulty0"),
+		TEXT("bDifficulty1"), TEXT("bDifficulty2"), TEXT("bDifficulty3"), TEXT("bSinglePlayer"), TEXT("bNet"), TEXT("bNetSpecial")
+	};
+	static const TCHAR* ActorRenderBools[] =
+	{
+		TEXT("bUnlit"), TEXT("bNoSmooth"), TEXT("bParticles"), TEXT("bRandomFrame"), TEXT("bMeshEnviroMap"), TEXT("bMeshCurvy")
+	};
+	static const TCHAR* ActorRelevancyBools[] =
+	{
+		TEXT("bShadowCast"), TEXT("bOwnerNoSee"), TEXT("bOnlyOwnerSee"), TEXT("bIsMover"), TEXT("bAlwaysRelevant"),
+		TEXT("bAlwaysTick"), TEXT("bHurtEntry"), TEXT("bGameRelevant"), TEXT("bCarriedItem"), TEXT("bForcePhysicsUpdate")
+	};
+	static const TCHAR* ActorCollisionBools[] =
+	{
+		TEXT("bCollideActors"), TEXT("bCollideWorld"), TEXT("bBlockActors"), TEXT("bBlockPlayers"), TEXT("bProjTarget")
+	};
+	static const TCHAR* ActorLightingBools[] =
+	{
+		TEXT("bSpecialLit"), TEXT("bActorShadows"), TEXT("bCorona"), TEXT("bLensFlare"), TEXT("bBounce"),
+		TEXT("bFixedRotationDir"), TEXT("bRotateToDesired"), TEXT("bInterpolating"), TEXT("bJustTeleported")
+	};
+	FixupNativeBoolBlockOffset( AActor::StaticClass(), TEXT("ActorCore"), ActorCoreBools, ARRAY_COUNT(ActorCoreBools), STRUCT_OFFSET(AActor,Physics)-sizeof(BITFIELD) );
+	FixupNativeBoolBlockOffset( AActor::StaticClass(), TEXT("ActorEditor"), ActorEditorBools, ARRAY_COUNT(ActorEditorBools), STRUCT_OFFSET(AActor,OddsOfAppearing)-sizeof(BITFIELD) );
+	FixupNativeBoolBlockOffset( AActor::StaticClass(), TEXT("ActorRender"), ActorRenderBools, ARRAY_COUNT(ActorRenderBools), STRUCT_OFFSET(AActor,VisibilityRadius)-sizeof(BITFIELD) );
+	FixupNativeBoolBlockOffset( AActor::StaticClass(), TEXT("ActorRelevancy"), ActorRelevancyBools, ARRAY_COUNT(ActorRelevancyBools), STRUCT_OFFSET(AActor,MultiSkins)-sizeof(BITFIELD) );
+	FixupNativeBoolBlockOffset( AActor::StaticClass(), TEXT("ActorCollision"), ActorCollisionBools, ARRAY_COUNT(ActorCollisionBools), STRUCT_OFFSET(AActor,LightType)-sizeof(BITFIELD) );
+	FixupNativeBoolBlockOffset( AActor::StaticClass(), TEXT("ActorLighting"), ActorLightingBools, ARRAY_COUNT(ActorLightingBools), STRUCT_OFFSET(AActor,DodgeDir)-sizeof(BITFIELD) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("Summary"), STRUCT_OFFSET(ALevelInfo,Summary) );
+	static const TCHAR* LevelInfoPlayBools[] =
+	{
+		TEXT("bLonePlayer"), TEXT("bBegunPlay"), TEXT("bPlayersOnly"), TEXT("bHighDetailMode"), TEXT("bDropDetail"),
+		TEXT("bAggressiveLOD"), TEXT("bStartup"), TEXT("bHumansOnly"), TEXT("bNoCheating"), TEXT("bAllowFOV")
+	};
+	FixupNativeBoolBlockOffset( ALevelInfo::StaticClass(), TEXT("LevelInfoPlay"), LevelInfoPlayBools, ARRAY_COUNT(LevelInfoPlayBools), STRUCT_OFFSET(ALevelInfo,Song)-sizeof(BITFIELD) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("Song"), STRUCT_OFFSET(ALevelInfo,Song) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("SongSection"), STRUCT_OFFSET(ALevelInfo,SongSection) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("CdTrack"), STRUCT_OFFSET(ALevelInfo,CdTrack) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("PlayerDoppler"), STRUCT_OFFSET(ALevelInfo,PlayerDoppler) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("Brightness"), STRUCT_OFFSET(ALevelInfo,Brightness) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("Screenshot"), STRUCT_OFFSET(ALevelInfo,Screenshot) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("DefaultTexture"), STRUCT_OFFSET(ALevelInfo,DefaultTexture) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("HubStackLevel"), STRUCT_OFFSET(ALevelInfo,HubStackLevel) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("LevelAction"), STRUCT_OFFSET(ALevelInfo,LevelAction) );
+	static const TCHAR* LevelInfoRenderBools[] = { TEXT("bNeverPrecache") };
+	FixupNativeBoolBlockOffset( ALevelInfo::StaticClass(), TEXT("LevelInfoRender"), LevelInfoRenderBools, ARRAY_COUNT(LevelInfoRenderBools), STRUCT_OFFSET(ALevelInfo,NetMode)-sizeof(BITFIELD) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("Game"), STRUCT_OFFSET(ALevelInfo,Game) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("NetMode"), STRUCT_OFFSET(ALevelInfo,NetMode) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("DefaultGameType"), STRUCT_OFFSET(ALevelInfo,DefaultGameType) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("NavigationPointList"), STRUCT_OFFSET(ALevelInfo,NavigationPointList) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("PawnList"), STRUCT_OFFSET(ALevelInfo,PawnList) );
+	static const TCHAR* LevelInfoServerBools[] = { TEXT("bNextItems") };
+	FixupNativeBoolBlockOffset( ALevelInfo::StaticClass(), TEXT("LevelInfoServer"), LevelInfoServerBools, ARRAY_COUNT(LevelInfoServerBools), STRUCT_OFFSET(ALevelInfo,NextSwitchCountdown)-sizeof(BITFIELD) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("NextSwitchCountdown"), STRUCT_OFFSET(ALevelInfo,NextSwitchCountdown) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("AvgAITime"), STRUCT_OFFSET(ALevelInfo,AvgAITime) );
+	static const TCHAR* LevelInfoPhysicsBools[] = { TEXT("bCheckWalkSurfaces") };
+	FixupNativeBoolBlockOffset( ALevelInfo::StaticClass(), TEXT("LevelInfoPhysics"), LevelInfoPhysicsBools, ARRAY_COUNT(LevelInfoPhysicsBools), STRUCT_OFFSET(ALevelInfo,SpawnNotify)-sizeof(BITFIELD) );
+	FixupNativePropertyOffset( ALevelInfo::StaticClass(), TEXT("SpawnNotify"), STRUCT_OFFSET(ALevelInfo,SpawnNotify) );
+	unguard;
+#endif
+}
+
 /*-----------------------------------------------------------------------------
 	cleanup!!
 -----------------------------------------------------------------------------*/
@@ -223,6 +424,7 @@ void UGameEngine::Init()
 
 		// Create console.
 		UClass* ConsoleClass = StaticLoadClass( UConsole::StaticClass(), NULL, TEXT("ini:Engine.Engine.Console"), NULL, LOAD_NoFail, NULL );
+		UConsole::FixupNativeClassSize( ConsoleClass );
 		Viewport->Console = ConstructObject<UConsole>( ConsoleClass );
 		Viewport->Console->_Init( Viewport );
 		debugf( NAME_Init, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE console initialized class=%s"), ConsoleClass ? ConsoleClass->GetName() : TEXT("None") );
@@ -822,10 +1024,35 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 
 	// Verify classes.
 	guard(VerifyClasses);
-	VERIFY_CLASS_OFFSET( A, Actor,       Owner         );
-	VERIFY_CLASS_OFFSET( A, Actor,       TimerCounter  );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Owner"), STRUCT_OFFSET(AActor,Owner) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("TimerCounter"), STRUCT_OFFSET(AActor,TimerCounter) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Level"), STRUCT_OFFSET(AActor,Level) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("XLevel"), STRUCT_OFFSET(AActor,XLevel) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Tag"), STRUCT_OFFSET(AActor,Tag) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Event"), STRUCT_OFFSET(AActor,Event) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Target"), STRUCT_OFFSET(AActor,Target) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Instigator"), STRUCT_OFFSET(AActor,Instigator) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Inventory"), STRUCT_OFFSET(AActor,Inventory) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Base"), STRUCT_OFFSET(AActor,Base) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Region"), STRUCT_OFFSET(AActor,Region) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Location"), STRUCT_OFFSET(AActor,Location) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Rotation"), STRUCT_OFFSET(AActor,Rotation) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("DrawType"), STRUCT_OFFSET(AActor,DrawType) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Style"), STRUCT_OFFSET(AActor,Style) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Sprite"), STRUCT_OFFSET(AActor,Sprite) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Texture"), STRUCT_OFFSET(AActor,Texture) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Skin"), STRUCT_OFFSET(AActor,Skin) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Mesh"), STRUCT_OFFSET(AActor,Mesh) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("Brush"), STRUCT_OFFSET(AActor,Brush) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("DrawScale"), STRUCT_OFFSET(AActor,DrawScale) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("PrePivot"), STRUCT_OFFSET(AActor,PrePivot) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("MultiSkins"), STRUCT_OFFSET(AActor,MultiSkins) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("AmbientSound"), STRUCT_OFFSET(AActor,AmbientSound) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("CollisionRadius"), STRUCT_OFFSET(AActor,CollisionRadius) );
+	FixupNativePropertyOffset( AActor::StaticClass(), TEXT("CollisionHeight"), STRUCT_OFFSET(AActor,CollisionHeight) );
 	VERIFY_CLASS_OFFSET( A, PlayerPawn,  Player        );
 	VERIFY_CLASS_OFFSET( A, PlayerPawn,  MaxStepHeight );
+	FixupCriticalNativeOffsets();
 	unguard;
 
 	// Get LevelInfo.
@@ -887,7 +1114,11 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 		{for( INT i=0; i<GLevel->Actors.Num(); i++ )
 			if( GLevel->Actors(i) )
 				GLevel->Actors(i)->ClearFlags( RF_EliminateObject );}
+#if defined(PLATFORM_64BIT)
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V163_LOADMAP_GC_SKIP skipping cleanup GC on 64-bit map=%s"), GLevel->GetOuter()->GetName() );
+#else
 		CollectGarbage( RF_Native );
+#endif
 	}
 	unguard;
 
@@ -1055,18 +1286,28 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 		else
 		{
 			// Send PreBeginPlay.
+#if defined(PLATFORM_64BIT)
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V167_PREBEGINPLAY_LOOP_SKIP skipping PreBeginPlay loop on 64-bit map=%s actors=%i"), GLevel->GetOuter()->GetName(), GLevel->Actors.Num() );
+#else
 			debugf( NAME_Log, TEXT("UT99_ANDROID_V145_BEGINPLAY_TRACE PreBeginPlay loop begin actors=%i"), GLevel->Actors.Num() );
 			for( i=0; i<GLevel->Actors.Num(); i++ )
 				if( GLevel->Actors(i) )
+				{
 					GLevel->Actors(i)->eventPreBeginPlay();
+				}
 			debugf( NAME_Log, TEXT("UT99_ANDROID_V145_BEGINPLAY_TRACE PreBeginPlay loop done") );
+#endif
 
 			// Set BeginPlay.
+#if defined(PLATFORM_64BIT)
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V168_BEGINPLAY_LOOP_SKIP skipping BeginPlay loop on 64-bit map=%s actors=%i"), GLevel->GetOuter()->GetName(), GLevel->Actors.Num() );
+#else
 			debugf( NAME_Log, TEXT("UT99_ANDROID_V145_BEGINPLAY_TRACE BeginPlay loop begin") );
 			for( i=0; i<GLevel->Actors.Num(); i++ )
 				if( GLevel->Actors(i) )
 					GLevel->Actors(i)->eventBeginPlay();
 			debugf( NAME_Log, TEXT("UT99_ANDROID_V145_BEGINPLAY_TRACE BeginPlay loop done") );
+#endif
 		}
 
 		// Set zones.
@@ -1078,6 +1319,9 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 
 		if( !bSkipEntryScriptStartup )
 		{
+#if defined(PLATFORM_64BIT)
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V169_POSTSTARTUP_LOOP_SKIP skipping PostBeginPlay/SetInitialState on 64-bit map=%s actors=%i"), GLevel->GetOuter()->GetName(), GLevel->Actors.Num() );
+#else
 			// Post begin play.
 			debugf( NAME_Log, TEXT("UT99_ANDROID_V145_BEGINPLAY_TRACE PostBeginPlay loop begin") );
 			for( i=0; i<GLevel->Actors.Num(); i++ )
@@ -1091,6 +1335,7 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 				if( GLevel->Actors(i) )
 					GLevel->Actors(i)->eventSetInitialState();
 			debugf( NAME_Log, TEXT("UT99_ANDROID_V145_BEGINPLAY_TRACE SetInitialState loop done") );
+#endif
 		}
 
 		// Find bases
@@ -1159,30 +1404,44 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 	guard(ClientInit);
 	if( Client )
 	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE ClientInit begin map=%s viewports=%i server=%i"), GLevel->GetOuter()->GetName(), Client->Viewports.Num(), GLevel->IsServer() );
 		// Match Viewports to actors.
 		MatchViewportsToActors( Client, GLevel->IsServer() ? GLevel : GEntry, URL );
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE MatchViewports done map=%s viewports=%i actor=%s"), GLevel->GetOuter()->GetName(), Client->Viewports.Num(), (Client->Viewports.Num() && Client->Viewports(0)->Actor) ? Client->Viewports(0)->Actor->GetFullName() : TEXT("None") );
 
 		// Init brush tracker.
 		if( appStricmp(GLevel->GetOuter()->GetName(),TEXT("Entry"))!=0 )//!!
+		{
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE BrushTracker begin map=%s"), GLevel->GetOuter()->GetName() );
 			GLevel->BrushTracker = GNewBrushTracker( GLevel );
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE BrushTracker done tracker=%i"), GLevel->BrushTracker != NULL );
+		}
 
 		// Set up audio.
 		if( Audio )
+		{
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE Audio SetViewport begin viewport=%i"), Client->Viewports.Num() );
 			Audio->SetViewport( Audio->GetViewport() );
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE Audio SetViewport done") );
+		}
 
 		// Reset viewports.
 		for( INT i=0; i<Client->Viewports.Num(); i++ )
 		{
 			UViewport* Viewport = Client->Viewports(i);
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE ResetViewport index=%i actor=%s rendev=%s size=%ix%i"), i, Viewport->Actor ? Viewport->Actor->GetFullName() : TEXT("None"), Viewport->RenDev ? Viewport->RenDev->GetClass()->GetName() : TEXT("None"), Viewport->SizeX, Viewport->SizeY );
 			Viewport->Input->ResetInput();
 			if( Viewport->RenDev )
 				Viewport->RenDev->Flush(1);
 		}
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE ClientInit done map=%s"), GLevel->GetOuter()->GetName() );
 	}
 	unguard;
 
 	// Init detail.
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE DetailChange begin high=%i map=%s"), Info->bHighDetailMode, GLevel->GetOuter()->GetName() );
 	GLevel->DetailChange( Info->bHighDetailMode );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE DetailChange done map=%s"), GLevel->GetOuter()->GetName() );
 
 	// Remember the URL.
 	guard(RememberURL);
@@ -1202,6 +1461,7 @@ ULevel* UGameEngine::LoadMap( const FURL& URL, UPendingLevel* Pending, const TMa
 	}
 
 	// Successfully started local level.
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V162_LOADMAP_TRACE LoadMap success map=%s actors=%i viewports=%i"), GLevel->GetOuter()->GetName(), GLevel->Actors.Num(), Client ? Client->Viewports.Num() : 0 );
 	return GLevel;
 	unguard;
 }

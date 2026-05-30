@@ -42,6 +42,88 @@ static inline INT RemapRuntimeScriptOffset( FFrame& Stack, INT Offset )
 	return NativeOffset;
 }
 
+static inline INT ComputeRuntimeSkipDistance( FFrame& Stack, INT CompatDistance )
+{
+	if( !Stack.Node )
+		return CompatDistance;
+	INT NativeExprStart = Stack.Code - &Stack.Node->Script(0);
+	if( NativeExprStart<0 || NativeExprStart>=Stack.Node->Script.Num() )
+		return CompatDistance;
+	FArchive TempAr;
+	INT ParsedSkip = NativeExprStart;
+	Stack.Node->SerializeExpr( ParsedSkip, TempAr );
+	if( ParsedSkip<Stack.Node->Script.Num() && Stack.Node->Script(ParsedSkip)==EX_EndFunctionParms )
+		ParsedSkip++;
+	INT NativeDistance = ParsedSkip - NativeExprStart;
+	if( NativeDistance>0 && NativeDistance!=CompatDistance )
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V178_SKIP_DISTANCE node=%s compat=%i native=%i exprStart=%i"),
+			Stack.Node->GetFullName(),
+			CompatDistance,
+			NativeDistance,
+			NativeExprStart );
+	return NativeDistance>0 ? NativeDistance : CompatDistance;
+}
+
+static UBOOL IsKnownScriptPropertyPointer( UProperty* Property )
+{
+	guardSlow(IsKnownScriptPropertyPointer);
+	if( !Property )
+		return 0;
+	for( TObjectIterator<UProperty> It; It; ++It )
+		if( *It==Property )
+			return 1;
+	return 0;
+	unguardSlow;
+}
+
+static UBOOL IsKnownScriptObjectPointer( UObject* Object )
+{
+	guardSlow(IsKnownScriptObjectPointer);
+	if( !Object )
+		return 1;
+	for( FObjectIterator It; It; ++It )
+		if( *It==Object )
+			return 1;
+	return 0;
+	unguardSlow;
+}
+
+static UObject* ValidateScriptObjectPointer( FFrame& Stack, UObject* Object, const TCHAR* Context )
+{
+	guardSlow(ValidateScriptObjectPointer);
+	if( !IsKnownScriptObjectPointer( Object ) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V182_BAD_SCRIPT_OBJECT context=%s object=%s node=%s code=%i obj=%p property=%s propaddr=%p"),
+			Context,
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			(Stack.Node && Stack.Node->Script.Num()) ? (INT)(Stack.Code - &Stack.Node->Script(0)) : -1,
+			Object,
+			GProperty ? GProperty->GetFullName() : TEXT("None"),
+			GPropAddr );
+		return NULL;
+	}
+	return Object;
+	unguardSlow;
+}
+
+static UBOOL ValidateScriptProperty( FFrame& Stack, UProperty* Property, const TCHAR* Context )
+{
+	guardSlow(ValidateScriptProperty);
+	if( !IsKnownScriptPropertyPointer(Property) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V164_BAD_SCRIPT_PROPERTY context=%s object=%s node=%s code=%i prop=%p"),
+			Context,
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			(Stack.Node && Stack.Node->Script.Num()) ? (INT)(Stack.Code - &Stack.Node->Script(0)) : -1,
+			Property );
+		return 0;
+	}
+	return 1;
+	unguardSlow;
+}
+
 /*-----------------------------------------------------------------------------
 	FFrame implementation.
 -----------------------------------------------------------------------------*/
@@ -225,6 +307,26 @@ void UObject::execLocalVariable( FFrame& Stack, RESULT_DECL )
 	checkSlow(Stack.Object==this);
 	checkSlow(Stack.Locals!=NULL);
 	GProperty = (UProperty*)Stack.ReadObject();
+	if( !ValidateScriptProperty( Stack, GProperty, TEXT("LocalVariable") ) )
+	{
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
+	if( GProperty->Offset < 0 || GProperty->Offset + GProperty->GetSize() > Stack.Node->GetPropertiesSize() )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V164_BAD_SCRIPT_PROPERTY_RANGE context=LocalVariable object=%s node=%s prop=%s offset=%i size=%i props=%i code=%i"),
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			GProperty->GetFullName(),
+			GProperty->Offset,
+			GProperty->GetSize(),
+			Stack.Node ? Stack.Node->GetPropertiesSize() : -1,
+			(Stack.Node && Stack.Node->Script.Num()) ? (INT)(Stack.Code - &Stack.Node->Script(0)) : -1 );
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
 	GPropAddr = Stack.Locals + GProperty->Offset;
 	if( Result )
 		GProperty->CopyCompleteValue( Result, GPropAddr );
@@ -238,6 +340,34 @@ void UObject::execInstanceVariable( FFrame& Stack, RESULT_DECL )
 	guardSlow(UObject::execInstanceVariable);
 
 	GProperty = (UProperty*)Stack.ReadObject();
+	if( !ValidateScriptProperty( Stack, GProperty, TEXT("InstanceVariable") ) )
+	{
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
+	if( !ValidateScriptObjectPointer( Stack, this, TEXT("InstanceVariable.This") ) )
+	{
+		if( Result )
+			appMemzero( Result, GProperty->GetSize() );
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
+	if( GProperty->Offset < 0 || GProperty->Offset + GProperty->GetSize() > GetClass()->GetPropertiesSize() )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V164_BAD_SCRIPT_PROPERTY_RANGE context=InstanceVariable object=%s node=%s prop=%s offset=%i size=%i props=%i code=%i"),
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			GProperty->GetFullName(),
+			GProperty->Offset,
+			GProperty->GetSize(),
+			GetClass()->GetPropertiesSize(),
+			(Stack.Node && Stack.Node->Script.Num()) ? (INT)(Stack.Code - &Stack.Node->Script(0)) : -1 );
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
 	GPropAddr = (BYTE*)this + GProperty->Offset;
 	if( Result )
 		GProperty->CopyCompleteValue( Result, GPropAddr );
@@ -251,6 +381,26 @@ void UObject::execDefaultVariable( FFrame& Stack, RESULT_DECL )
 	guardSlow(UObject::execDefaultVariable);
 
 	GProperty = (UProperty*)Stack.ReadObject();
+	if( !ValidateScriptProperty( Stack, GProperty, TEXT("DefaultVariable") ) )
+	{
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
+	if( GProperty->Offset < 0 || GProperty->Offset + GProperty->GetSize() > GetClass()->Defaults.Num() )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V164_BAD_SCRIPT_PROPERTY_RANGE context=DefaultVariable object=%s node=%s prop=%s offset=%i size=%i defaults=%i code=%i"),
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			GProperty->GetFullName(),
+			GProperty->Offset,
+			GProperty->GetSize(),
+			GetClass()->Defaults.Num(),
+			(Stack.Node && Stack.Node->Script.Num()) ? (INT)(Stack.Code - &Stack.Node->Script(0)) : -1 );
+		GProperty = NULL;
+		GPropAddr = NULL;
+		return;
+	}
 	GPropAddr = &GetClass()->Defaults(GProperty->Offset);
 	if( Result )
 		GProperty->CopyCompleteValue( Result, GPropAddr );
@@ -668,6 +818,7 @@ void UObject::execContext( FFrame& Stack, RESULT_DECL )
 	// Get actor variable.
 	UObject* NewContext=NULL;
 	Stack.Step( this, &NewContext );
+	NewContext = ValidateScriptObjectPointer( Stack, NewContext, TEXT("Context") );
 
 	// Execute or skip the following expression in the actor's context.
 	if( NewContext != NULL )
@@ -680,7 +831,41 @@ void UObject::execContext( FFrame& Stack, RESULT_DECL )
 		Stack.Logf( TEXT("Accessed None") );
 		INT wSkip = Stack.ReadWord();
 		BYTE bSize = *Stack.Code++;
-		Stack.Code = &Stack.Node->Script( RemapRuntimeScriptOffset( Stack, wSkip ) );
+		INT NativeSkip = RemapRuntimeScriptOffset( Stack, wSkip );
+		if( Stack.Node )
+		{
+			INT NativeExprStart = Stack.Code - &Stack.Node->Script(0);
+			if( NativeExprStart>=0 && NativeExprStart<Stack.Node->Script.Num() )
+			{
+				FArchive TempAr;
+				INT ParsedSkip = NativeExprStart;
+				Stack.Node->SerializeExpr( ParsedSkip, TempAr );
+				if( ParsedSkip>NativeExprStart && ParsedSkip<=Stack.Node->Script.Num() && ParsedSkip!=NativeSkip )
+				{
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V176_CONTEXT_PARSE_SKIP object=%s node=%s compat=%i remap=%i parsed=%i exprStart=%i"),
+						Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+						Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+						wSkip,
+						NativeSkip,
+						ParsedSkip,
+						NativeExprStart );
+					NativeSkip = ParsedSkip;
+				}
+			}
+		}
+		BYTE D0 = (Stack.Node && NativeSkip>=0 && NativeSkip+0<Stack.Node->Script.Num()) ? Stack.Node->Script(NativeSkip+0) : 0xff;
+		BYTE D1 = (Stack.Node && NativeSkip>=0 && NativeSkip+1<Stack.Node->Script.Num()) ? Stack.Node->Script(NativeSkip+1) : 0xff;
+		BYTE D2 = (Stack.Node && NativeSkip>=0 && NativeSkip+2<Stack.Node->Script.Num()) ? Stack.Node->Script(NativeSkip+2) : 0xff;
+		BYTE D3 = (Stack.Node && NativeSkip>=0 && NativeSkip+3<Stack.Node->Script.Num()) ? Stack.Node->Script(NativeSkip+3) : 0xff;
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V165_CONTEXT_SKIP object=%s node=%s compat=%i native=%i size=%i bytes=%02x %02x %02x %02x script=%i"),
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			wSkip,
+			NativeSkip,
+			bSize,
+			D0, D1, D2, D3,
+			Stack.Node ? Stack.Node->Script.Num() : -1 );
+		Stack.Code = &Stack.Node->Script( NativeSkip );
 		GPropAddr = NULL;
 		GProperty = NULL;
 		if( Result )
@@ -893,6 +1078,7 @@ void UObject::execDynamicCast( FFrame& Stack, RESULT_DECL )
 	// Compile object expression.
 	UObject* Castee = NULL;
 	Stack.Step( Stack.Object, &Castee );
+	Castee = ValidateScriptObjectPointer( Stack, Castee, TEXT("DynamicCast") );
 	*(UObject**)Result = (Castee && Castee->IsA(Class)) ? Castee : NULL;
 
 	unguardexecSlow;
@@ -909,6 +1095,7 @@ void UObject::execMetaCast( FFrame& Stack, RESULT_DECL )
 	// Compile actor expression.
 	UObject* Castee=NULL;
 	Stack.Step( Stack.Object, &Castee );
+	Castee = ValidateScriptObjectPointer( Stack, Castee, TEXT("MetaCast") );
 	*(UObject**)Result = (Castee && Castee->IsA(UClass::StaticClass()) && ((UClass*)Castee)->IsChildOf(MetaClass)) ? Castee : NULL;
 
 	unguardexecSlow;
@@ -1085,6 +1272,17 @@ void UObject::execObjectToString( FFrame& Stack, RESULT_DECL )
 {
 	guardSlow(UObject::execObjectToString);
 	P_GET_OBJECT(UObject,Obj);
+	if( !IsKnownScriptObjectPointer( Obj ) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V179_BAD_OBJECT_TO_STRING object=%s node=%s code=%i obj=%p property=%s propaddr=%p"),
+			Stack.Object ? Stack.Object->GetFullName() : TEXT("None"),
+			Stack.Node ? Stack.Node->GetFullName() : TEXT("None"),
+			(Stack.Node && Stack.Node->Script.Num()) ? (INT)(Stack.Code - &Stack.Node->Script(0)) : -1,
+			Obj,
+			GProperty ? GProperty->GetFullName() : TEXT("None"),
+			GPropAddr );
+		Obj = NULL;
+	}
 	*(FString*)Result = Obj ? Obj->GetPathName() : TEXT("None");
 	unguardexecSlow;
 }
@@ -1216,7 +1414,7 @@ void UObject::execAndAnd_BoolBool( FFrame& Stack, RESULT_DECL )
 	else
 	{
 		*(DWORD*)Result = 0;
-		Stack.Code += W;
+		Stack.Code += ComputeRuntimeSkipDistance( Stack, W );
 	}
 	unguardexecSlow;
 }
@@ -1250,7 +1448,7 @@ void UObject::execOrOr_BoolBool( FFrame& Stack, RESULT_DECL )
 	else
 	{
 		*(DWORD*)Result = 1;
-		Stack.Code += W;
+		Stack.Code += ComputeRuntimeSkipDistance( Stack, W );
 	}
 	unguardexecSlow;
 }
@@ -3240,6 +3438,8 @@ void UObject::execEqualEqual_ObjectObject( FFrame& Stack, RESULT_DECL )
 	P_GET_OBJECT(UObject,A);
 	P_GET_OBJECT(UObject,B);
 	P_FINISH;
+	A = ValidateScriptObjectPointer( Stack, A, TEXT("EqualEqual_ObjectObject.A") );
+	B = ValidateScriptObjectPointer( Stack, B, TEXT("EqualEqual_ObjectObject.B") );
 
 	*(DWORD*)Result = A == B;
 
@@ -3254,6 +3454,8 @@ void UObject::execNotEqual_ObjectObject( FFrame& Stack, RESULT_DECL )
 	P_GET_OBJECT(UObject,A);
 	P_GET_OBJECT(UObject,B);
 	P_FINISH;
+	A = ValidateScriptObjectPointer( Stack, A, TEXT("NotEqual_ObjectObject.A") );
+	B = ValidateScriptObjectPointer( Stack, B, TEXT("NotEqual_ObjectObject.B") );
 
 	*(DWORD*)Result = A != B;
 

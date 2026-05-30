@@ -15,6 +15,18 @@
 #include "S3tc.h"
 #endif
 
+static UBOOL IsKnownTextureObject( UObject* Object )
+{
+	guardSlow(IsKnownTextureObject);
+	if( !Object )
+		return 1;
+	for( FObjectIterator It; It; ++It )
+		if( *It == Object )
+			return 1;
+	return 0;
+	unguardSlow;
+}
+
 /*-----------------------------------------------------------------------------
 	UBitmap.
 -----------------------------------------------------------------------------*/
@@ -80,10 +92,21 @@ void UTexture::Update( DOUBLE CurrentTime )
 void UTexture::Lock( FTextureInfo& TextureInfo, DOUBLE CurrentTime, INT LOD, URenderDevice* RenDev )
 {
 	guard(UTexture::Lock);
+	if( !IsKnownTextureObject( Palette ) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V186_BAD_TEXTURE_PALETTE texture=%s palette=%p"), GetFullName(), Palette );
+		Palette = NULL;
+	}
 
 	// See if format needs translating.
 	UBOOL UseComp = bHasComp && RenDev && RenDev->SupportsTC && CompFormat==TEXF_DXT1;
 	TArray<FMipmap>& WhichMips = UseComp ? CompMips : Mips;
+	if( WhichMips.Num() <= 0 )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V186_BAD_TEXTURE_MIPS texture=%s useComp=%i mips=%i compMips=%i"), GetFullName(), UseComp, Mips.Num(), CompMips.Num() );
+		appMemzero( &TextureInfo, sizeof(TextureInfo) );
+		return;
+	}
 
 	// Adjust LOD.
 	if( LOD==-1 )
@@ -103,7 +126,7 @@ void UTexture::Lock( FTextureInfo& TextureInfo, DOUBLE CurrentTime, INT LOD, URe
 	FLOAT ScaleFactor           = Mips(0).USize / (FLOAT)WhichMips(LOD).USize;
 	TextureInfo.UScale          = Scale * ScaleFactor;
 	TextureInfo.VScale          = Scale * ScaleFactor;
-	TextureInfo.PaletteCacheID	= MakeCacheID( CID_RenderPalette, Palette );
+	TextureInfo.PaletteCacheID	= Palette ? MakeCacheID( CID_RenderPalette, Palette ) : 0;
 	TextureInfo.Palette			= GetColors();
 	TextureInfo.CacheID			= MakeCacheID( (ECacheIDBase)(CID_RenderTexture+LOD), this );
 	TextureInfo.USize			= TextureInfo.UClamp			= WhichMips(LOD).USize;
@@ -206,7 +229,21 @@ void UTexture::ConstantTimeTick()
 	guard(UTexture::ConstantTimeTick);
 
 	// Simple cyclic animation.
-	if( !AnimCur ) AnimCur = this;
+	if( !IsKnownTextureObject( AnimCur ) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V187_BAD_TEXTURE_ANIM texture=%s field=AnimCur object=%p"), GetFullName(), AnimCur );
+		AnimCur = this;
+	}
+	if( !AnimCur )
+		AnimCur = this;
+	if( !IsKnownTextureObject( AnimCur->AnimNext ) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V187_BAD_TEXTURE_ANIM texture=%s field=AnimNext owner=%s object=%p"),
+			GetFullName(),
+			AnimCur ? AnimCur->GetFullName() : TEXT("None"),
+			AnimCur ? AnimCur->AnimNext : NULL );
+		AnimCur->AnimNext = NULL;
+	}
 	AnimCur = AnimCur->AnimNext;
 	if( !AnimCur ) AnimCur = this;
 

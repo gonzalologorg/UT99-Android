@@ -545,6 +545,7 @@ APlayerPawn* ULevel::SpawnPlayActor( UPlayer* Player, ENetRole RemoteRole, const
 {
 	guard(ULevel::SpawnPlayActor);
 	Error=TEXT("");
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE begin url=%s player=%s actors=%i"), *URL.String(), Player ? Player->GetFullName() : TEXT("None"), Actors.Num() );
 
 	// Get package map.
 	UPackageMap*    PackageMap = NULL;
@@ -563,6 +564,7 @@ APlayerPawn* ULevel::SpawnPlayActor( UPlayer* Player, ENetRole RemoteRole, const
 		PlayerClass = StaticLoadClass( APlayerPawn::StaticClass(), NULL, TEXT("ini:URL.Class"), NULL, LOAD_NoWarn, PackageMap );
 	if( !PlayerClass )
 		appErrorf( TEXT("%s"), LocalizeError("LoadPlayerClass") );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE playerclass=%s"), PlayerClass->GetFullName() );
 
 	// Make the option string.
 	TCHAR Options[1024]=TEXT("");
@@ -574,7 +576,9 @@ APlayerPawn* ULevel::SpawnPlayActor( UPlayer* Player, ENetRole RemoteRole, const
 
 	// Tell UnrealScript to log in.
 	INT SavedActorCount = Actors.Num();//oldver: Login should say whether to accept inventory.
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE eventLogin begin portal=%s options=%s game=%s savedActors=%i"), *URL.Portal, Options, GetLevelInfo()->Game ? GetLevelInfo()->Game->GetFullName() : TEXT("None"), SavedActorCount );
 	APlayerPawn* Actor = GetLevelInfo()->Game->eventLogin( *URL.Portal, Options, Error, PlayerClass );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE eventLogin done actor=%s error=%s actors=%i"), Actor ? Actor->GetFullName() : TEXT("None"), *Error, Actors.Num() );
 	if( !Actor )
 	{
 		debugf( NAME_Warning, TEXT("Login failed: %s"), *Error);
@@ -583,14 +587,18 @@ APlayerPawn* ULevel::SpawnPlayActor( UPlayer* Player, ENetRole RemoteRole, const
 	UBOOL AcceptInventory = (SavedActorCount!=Actors.Num());//oldver: Hack, accepts inventory iff actor was spawned.
 
 	// Possess the newly-spawned player.
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE SetPlayer begin actor=%s acceptInventory=%i"), Actor->GetFullName(), AcceptInventory );
 	Actor->SetPlayer( Player );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE SetPlayer done player=%s"), Actor->Player ? Actor->Player->GetFullName() : TEXT("None") );
 	Actor->Role       = ROLE_Authority;
 	Actor->RemoteRole = RemoteRole;
 	Actor->ShowFlags  = SHOW_Backdrop | SHOW_Actors | SHOW_PlayerCtrl | SHOW_RealTime;
 	Actor->RendMap	  = REN_DynLight;
 	if( ParseParam(appCmdLine(),TEXT("alladmin")) || !NetDriver )
 		Actor->bAdmin = 1;
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE TravelPreAccept begin actor=%s"), Actor->GetFullName() );
 	Actor->eventTravelPreAccept();
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE TravelPreAccept done actor=%s"), Actor->GetFullName() );
 
 	// Any saved items?
 	Str = NULL;
@@ -701,14 +709,30 @@ APlayerPawn* ULevel::SpawnPlayActor( UPlayer* Player, ENetRole RemoteRole, const
 	}
 
 	// Call travel-acceptance functions in reverse order to avoid inventory flipping.
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE accepted inventory imports=%i"), Accepted.Num() );
 	for( i=Accepted.Num()-1; i>=0; i-- )
+	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE accepted TravelPreAccept begin actor=%s"), Accepted(i).Actor ? Accepted(i).Actor->GetFullName() : TEXT("None") );
 		Accepted(i).Actor->eventTravelPreAccept();
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE accepted TravelPreAccept done index=%i"), i );
+	}
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE AcceptInventory begin actor=%s"), Actor->GetFullName() );
 	GetLevelInfo()->Game->eventAcceptInventory( Actor );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE AcceptInventory done actor=%s"), Actor->GetFullName() );
 	for( i=Accepted.Num()-1; i>=0; i-- )
+	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE accepted TravelPostAccept begin actor=%s"), Accepted(i).Actor ? Accepted(i).Actor->GetFullName() : TEXT("None") );
 		Accepted(i).Actor->eventTravelPostAccept();
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE accepted TravelPostAccept done index=%i"), i );
+	}
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE TravelPostAccept begin actor=%s"), Actor->GetFullName() );
 	Actor->eventTravelPostAccept();
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE TravelPostAccept done actor=%s"), Actor->GetFullName() );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE PostLogin begin actor=%s"), Actor->GetFullName() );
 	GetLevelInfo()->Game->eventPostLogin( Actor );
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE PostLogin done actor=%s"), Actor->GetFullName() );
 
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V173_SPAWNPLAY_TRACE success actor=%s player=%s"), Actor->GetFullName(), Actor->Player ? Actor->Player->GetFullName() : TEXT("None") );
 	return Actor;
 	unguard;
 }

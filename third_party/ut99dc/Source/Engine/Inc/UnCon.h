@@ -32,6 +32,7 @@ class ENGINE_API UConsole : public UObject, public FOutputDevice
 	UConsole();
 
 	// UConsole interface.
+	static void FixupNativeClassSize( UClass* ConsoleClass );
 	virtual void _Init( UViewport* Viewport );
 	virtual void PreRender( FSceneNode* Frame );
 	virtual void PostRender( FSceneNode* Frame );

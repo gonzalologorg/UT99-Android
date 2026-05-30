@@ -24,6 +24,11 @@ static const char *VertShaderGLSL {
 IMPLEMENT_PACKAGE(NOpenGLESDrv);
 IMPLEMENT_CLASS(UNOpenGLESRenderDevice);
 
+static INT GAndroidGLESFrameCounter = 0;
+static INT GAndroidGLESSurfaceCount = 0;
+static INT GAndroidGLESGouraudCount = 0;
+static INT GAndroidGLESTileCount = 0;
+
 /*-----------------------------------------------------------------------------
 	UNOpenGLESRenderDevice implementation.
 -----------------------------------------------------------------------------*/
@@ -77,6 +82,9 @@ UNOpenGLESRenderDevice::UNOpenGLESRenderDevice()
 	Overbright = true;
 	NoFiltering = false;
 	UseVAO = false;
+#if PLATFORM_ANDROID
+	UseVAO = true;
+#endif
 	UseBGRA = true;
 	CurrentBrightness = -1.f;
 }
@@ -119,7 +127,13 @@ UBOOL UNOpenGLESRenderDevice::Init( UViewport* InViewport, INT NewX, INT NewY, I
 	{
 		glGenBuffers( 1, &GLBuf );
 		glBindBuffer( GL_ARRAY_BUFFER, GLBuf );
-		glBufferData( GL_ARRAY_BUFFER, VtxDataSize, (void*)VtxData, GL_DYNAMIC_DRAW );
+		glBufferData( GL_ARRAY_BUFFER, VtxDataSize * sizeof(FLOAT), (void*)VtxData, GL_DYNAMIC_DRAW );
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V196_GLES_VBO enabled=1 floats=%i bytes=%i glerr=0x%04x"),
+			VtxDataSize,
+			VtxDataSize * (INT)sizeof(FLOAT),
+			(DWORD)glGetError() );
+#endif
 	}
 
 	if( UseBGRA )
@@ -239,6 +253,12 @@ void UNOpenGLESRenderDevice::Lock( FPlane FlashScale, FPlane FlashFog, FPlane Sc
 {
 	guard(UNOpenGLESRenderDevice::Lock);
 
+	GAndroidGLESFrameCounter++;
+	GAndroidGLESSurfaceCount = 0;
+	GAndroidGLESGouraudCount = 0;
+	GAndroidGLESTileCount = 0;
+	if( Viewport )
+		glViewport( 0, 0, Viewport->SizeX, Viewport->SizeY );
 
 	glClearColor( ScreenClear.X, ScreenClear.Y, ScreenClear.Z, ScreenClear.W );
 	glClearDepthf( 1.f );
@@ -263,6 +283,13 @@ void UNOpenGLESRenderDevice::Lock( FPlane FlashScale, FPlane FlashFog, FPlane Sc
 	if( RenderLockFlags & LOCKR_ClearScreen )
 		ClearBits |= GL_COLOR_BUFFER_BIT;
 	glClear( ClearBits );
+	if( GAndroidGLESFrameCounter <= 12 || (GAndroidGLESFrameCounter % 60) == 0 )
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V189_GLES_LOCK frame=%i size=%ix%i clear=0x%08x glerr=0x%04x"),
+			GAndroidGLESFrameCounter,
+			Viewport ? Viewport->SizeX : 0,
+			Viewport ? Viewport->SizeY : 0,
+			(DWORD)ClearBits,
+			(DWORD)glGetError() );
 
 	if( FlashScale != FPlane(0.5f, 0.5f, 0.5f, 0.0f) || FlashFog != FPlane(0.0f, 0.0f, 0.0f, 0.0f) )
 		ColorMod = FPlane( FlashFog.X, FlashFog.Y, FlashFog.Z, 1.f - Min( FlashScale.X * 2.f, 1.f ) );
@@ -285,6 +312,14 @@ void UNOpenGLESRenderDevice::Unlock( UBOOL Blit )
 	FlushTriangles();
 
 	glFlush();
+	if( GAndroidGLESFrameCounter <= 12 || (GAndroidGLESFrameCounter % 60) == 0 )
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V189_GLES_UNLOCK frame=%i blit=%i surfaces=%i gouraud=%i tiles=%i glerr=0x%04x"),
+			GAndroidGLESFrameCounter,
+			Blit,
+			GAndroidGLESSurfaceCount,
+			GAndroidGLESGouraudCount,
+			GAndroidGLESTileCount,
+			(DWORD)glGetError() );
 
 	unguard;
 }
@@ -292,14 +327,43 @@ void UNOpenGLESRenderDevice::Unlock( UBOOL Blit )
 void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo& Surface, FSurfaceFacet& Facet )
 {
 	guard(UNOpenGLESRenderDevice::DrawComplexSurface);
+	GAndroidGLESSurfaceCount++;
 
 	check(Surface.Texture);
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=begin surface=%i poly=0x%08x texture=%p light=%p fog=%p detail=%p facetPolys=%p spanLines=%i"),
+		GAndroidGLESSurfaceCount,
+		Surface.PolyFlags,
+		Surface.Texture,
+		Surface.LightMap,
+		Surface.FogMap,
+		Surface.DetailTexture,
+		Facet.Polys,
+		Facet.Span ? Facet.Span->ValidLines : -1 );
+#endif
 
 	SetSceneNode( Frame );
 	SetBlend( Surface.PolyFlags );
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=before_tex0 surface=%i cache=0x%08x%08x mips=%i size=%ix%i format=%i palette=%p"),
+		GAndroidGLESSurfaceCount,
+		(DWORD)(Surface.Texture->CacheID >> 32),
+		(DWORD)Surface.Texture->CacheID,
+		Surface.Texture->NumMips,
+		Surface.Texture->USize,
+		Surface.Texture->VSize,
+		Surface.Texture->Format,
+		Surface.Texture->Palette );
+#endif
 	SetTexture( 0, *Surface.Texture, ( Surface.PolyFlags & PF_Masked ), 0.f );
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=after_tex0 surface=%i"), GAndroidGLESSurfaceCount );
+#endif
 	if( Surface.LightMap )
 	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=before_light surface=%i"), GAndroidGLESSurfaceCount );
+#endif
 		SetTexture( 1, *Surface.LightMap, 0, -0.5f );
 		CurrentShaderFlags |= SF_Lightmap;
 	}
@@ -310,15 +374,27 @@ void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo
 	}
 	if( Surface.DetailTexture && DetailTextures )
 	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=before_detail surface=%i"), GAndroidGLESSurfaceCount );
+#endif
 		SetTexture( 3, *Surface.DetailTexture, 0, 0.f );
 		CurrentShaderFlags |= SF_Detail;
 	}
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=before_shader surface=%i flags=0x%08x"), GAndroidGLESSurfaceCount, CurrentShaderFlags );
+#endif
 	SetShader( CurrentShaderFlags );
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=after_shader surface=%i"), GAndroidGLESSurfaceCount );
+#endif
 
 	FLOAT UDot = Facet.MapCoords.XAxis | Facet.MapCoords.Origin;
 	FLOAT VDot = Facet.MapCoords.YAxis | Facet.MapCoords.Origin;
 	for( FSavedPoly* Poly = Facet.Polys; Poly; Poly = Poly->Next )
 	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=poly surface=%i node=%i pts=%i"), GAndroidGLESSurfaceCount, Poly->iNode, Poly->NumPts );
+#endif
 		BeginPoly();
 		for( INT i = 0; i < Poly->NumPts; i++ )
 		{
@@ -336,6 +412,9 @@ void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo
 		}
 		EndPoly();
 	}
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_DRAWCOMPLEX stage=end surface=%i"), GAndroidGLESSurfaceCount );
+#endif
 
 	CurrentShaderFlags &= ~( SF_Lightmap|SF_Fogmap|SF_Detail );
 
@@ -349,6 +428,7 @@ void UNOpenGLESRenderDevice::DrawComplexSurface( FSceneNode* Frame, FSurfaceInfo
 void UNOpenGLESRenderDevice::DrawGouraudPolygon( FSceneNode* Frame, FTextureInfo& Texture, FTransTexture** Pts, INT NumPts, DWORD PolyFlags, FSpanBuffer* SpanBuffer )
 {
 	guard(UNOpenGLESRenderDevice::DrawGouraudPolygon);
+	GAndroidGLESGouraudCount++;
 
 	const UBOOL IsFog = ( ( PolyFlags & ( PF_RenderFog|PF_Translucent|PF_Modulated ) ) == PF_RenderFog );
 	const UBOOL IsModulated = ( PolyFlags & PF_Modulated );
@@ -384,6 +464,7 @@ void UNOpenGLESRenderDevice::DrawGouraudPolygon( FSceneNode* Frame, FTextureInfo
 void UNOpenGLESRenderDevice::DrawTile( FSceneNode* Frame, FTextureInfo& Texture, FLOAT X, FLOAT Y, FLOAT XL, FLOAT YL, FLOAT U, FLOAT V, FLOAT UL, FLOAT VL, FSpanBuffer* Span, FLOAT Z, FPlane Light, FPlane Fog, DWORD PolyFlags )
 {
 	guard(UNOpenGLESRenderDevice::DrawTile);
+	GAndroidGLESTileCount++;
 
 	FPlane VtxColor;
 	if( !( PolyFlags & PF_Modulated ) )
@@ -766,10 +847,21 @@ void UNOpenGLESRenderDevice::SetSceneNode( FSceneNode* Frame )
 		CurrentSceneNode.SizeY = Viewport->SizeY;
 	}
 
-	if( Frame->FX != CurrentSceneNode.FX || Frame->FY != CurrentSceneNode.FY ||
-			Viewport->Actor->FovAngle != CurrentSceneNode.FovAngle )
+	FLOAT FovAngle = Viewport->Actor->FovAngle;
+#if PLATFORM_ANDROID
+	if( appIsNan(FovAngle) || FovAngle < 1.0f || FovAngle > 170.0f )
 	{
-		RProjZ = appTan( Viewport->Actor->FovAngle * PI / 360.0 );
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V194_GLES_BAD_FOV actor=%s fov=%f defaulting=90.000000"),
+			Viewport->Actor->GetFullName(),
+			FovAngle );
+		FovAngle = 90.0f;
+		Viewport->Actor->FovAngle = FovAngle;
+	}
+#endif
+	if( Frame->FX != CurrentSceneNode.FX || Frame->FY != CurrentSceneNode.FY ||
+			FovAngle != CurrentSceneNode.FovAngle )
+	{
+		RProjZ = appTan( FovAngle * PI / 360.0 );
 		Aspect = Frame->FY / Frame->FX;
 		RFX2 = 2.0f * RProjZ / Frame->FX;
 		RFY2 = 2.0f * RProjZ * Aspect / Frame->FY;
@@ -777,7 +869,7 @@ void UNOpenGLESRenderDevice::SetSceneNode( FSceneNode* Frame )
 		MtxMVP = MtxProj * MtxModelView;
 		CurrentSceneNode.FX = Frame->FX;
 		CurrentSceneNode.FY = Frame->FY;
-		CurrentSceneNode.FovAngle = Viewport->Actor->FovAngle;
+		CurrentSceneNode.FovAngle = FovAngle;
 		UniformsChanged[UF_Mtx] = true;
 	}
 
@@ -887,6 +979,29 @@ void UNOpenGLESRenderDevice::ResetTexture( INT TMU )
 void UNOpenGLESRenderDevice::SetTexture( INT TMU, FTextureInfo& Info, DWORD PolyFlags, FLOAT PanBias )
 {
 	guard(UNOpenGLESRenderDevice::SetTexture);
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_SETTEXTURE stage=begin tmu=%i cache=0x%08x%08x mips=%i size=%ix%i clamp=%ix%i scale=%f,%f format=%i palette=%p data0=%p poly=0x%08x"),
+		TMU,
+		(DWORD)(Info.CacheID >> 32),
+		(DWORD)Info.CacheID,
+		Info.NumMips,
+		Info.USize,
+		Info.VSize,
+		Info.UClamp,
+		Info.VClamp,
+		Info.UScale,
+		Info.VScale,
+		Info.Format,
+		Info.Palette,
+		(Info.Mips[0] ? Info.Mips[0]->DataPtr : NULL),
+		PolyFlags );
+	if( Info.NumMips <= 0 || !Info.Mips[0] || !Info.Mips[0]->DataPtr || Info.USize <= 0 || Info.VSize <= 0 || Info.UScale == 0.0f || Info.VScale == 0.0f )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V199_SETTEXTURE_SKIP_BAD tmu=%i cache=0x%08x%08x"), TMU, (DWORD)(Info.CacheID >> 32), (DWORD)Info.CacheID );
+		ResetTexture( TMU );
+		return;
+	}
+#endif
 
 	CurrentShaderFlags |= 1 << TMU;
 
@@ -930,7 +1045,13 @@ void UNOpenGLESRenderDevice::SetTexture( INT TMU, FTextureInfo& Info, DWORD Poly
 	{
 		// New texture or it has changed, upload it.
 		Info.bRealtimeChanged = 0;
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_SETTEXTURE stage=before_upload tmu=%i new=%i realtime=%i texId=%u"), TMU, !OldBind, RealtimeChanged, Bind->Id );
+#endif
 		UploadTexture( Info, ( PolyFlags & PF_Masked ), !OldBind );
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_SETTEXTURE stage=after_upload tmu=%i glerr=0x%04x"), TMU, (DWORD)glGetError() );
+#endif
 		// TODO: This depends on PolyFlags, not Info.
 		UpdateTextureFilter( Info, PolyFlags );
 	}
@@ -941,6 +1062,16 @@ void UNOpenGLESRenderDevice::SetTexture( INT TMU, FTextureInfo& Info, DWORD Poly
 void UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, UBOOL Masked, UBOOL NewTexture )
 {
 	guard(UNOpenGLESRenderDevice::UploadTexture);
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V199_UPLOAD stage=begin cache=0x%08x%08x mips=%i masked=%i new=%i palette=%p format=%i"),
+		(DWORD)(Info.CacheID >> 32),
+		(DWORD)Info.CacheID,
+		Info.NumMips,
+		Masked,
+		NewTexture,
+		Info.Palette,
+		Info.Format );
+#endif
 
 	if( !Info.Mips[0] )
 	{
@@ -961,6 +1092,14 @@ void UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, UBOOL Masked, UB
 	{
 		FMipmapBase* Mip = Info.Mips[MipIndex];
 		if( !Mip || !Mip->DataPtr ) break;
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_UPLOAD stage=mip index=%i size=%ix%i data=%p palette=%p"),
+			MipIndex,
+			Mip->USize,
+			Mip->VSize,
+			Mip->DataPtr,
+			Info.Palette );
+#endif
 		BYTE* UploadBuf;
 		GLenum UploadFormat;
 		// Convert texture if needed.
@@ -1009,10 +1148,16 @@ void UNOpenGLESRenderDevice::UploadTexture( FTextureInfo& Info, UBOOL Masked, UB
 			}
 		}
 		// Upload to GL.
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_UPLOAD stage=before_gl index=%i format=0x%04x upload=%p new=%i"), MipIndex, (DWORD)UploadFormat, UploadBuf, NewTexture );
+#endif
 		if( NewTexture )
 			glTexImage2D( GL_TEXTURE_2D, MipIndex, UploadFormat, Mip->USize, Mip->VSize, 0, UploadFormat, GL_UNSIGNED_BYTE, (void*)UploadBuf );
 		else
 			glTexSubImage2D( GL_TEXTURE_2D, MipIndex, 0, 0, Mip->USize, Mip->VSize, UploadFormat, GL_UNSIGNED_BYTE, (void*)UploadBuf );
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V199_UPLOAD stage=after_gl index=%i glerr=0x%04x"), MipIndex, (DWORD)glGetError() );
+#endif
 	}
 
 	unguard;

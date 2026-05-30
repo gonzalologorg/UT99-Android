@@ -17,6 +17,148 @@
 FRenderStats GStat;
 #endif
 
+static UBOOL IsKnownDrawWorldObject( UObject* Object )
+{
+	guardSlow(IsKnownDrawWorldObject);
+	if( !Object )
+		return 1;
+	for( FObjectIterator It; It; ++It )
+		if( *It == Object )
+			return 1;
+	return 0;
+	unguardSlow;
+}
+
+static UBOOL ValidateDrawWorldObject( UObject* Object, const TCHAR* Field )
+{
+	guardSlow(ValidateDrawWorldObject);
+	if( IsKnownDrawWorldObject( Object ) )
+		return 1;
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V185_BAD_DRAWWORLD_OBJECT field=%s object=%p"), Field, Object );
+	return 0;
+	unguardSlow;
+}
+
+static UBOOL ValidateDrawWorldTexture( UTexture* Texture, const TCHAR* Field )
+{
+	guardSlow(ValidateDrawWorldTexture);
+	if( !Texture )
+		return 0;
+	if( !IsKnownDrawWorldObject( Texture ) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V200_BAD_TEXTURE_OBJECT field=%s texture=%p"), Field, Texture );
+		return 0;
+	}
+	if( !Texture->IsA(UTexture::StaticClass()) )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V200_BAD_TEXTURE_CLASS field=%s object=%s class=%s"),
+			Field,
+			Texture->GetFullName(),
+			Texture->GetClass() ? Texture->GetClass()->GetFullName() : TEXT("None") );
+		return 0;
+	}
+	return 1;
+	unguardSlow;
+}
+
+static UTexture* FindDrawWorldFallbackTexture()
+{
+	guardSlow(FindDrawWorldFallbackTexture);
+	static UBOOL Attempted = 0;
+	static UTexture* Fallback = NULL;
+	if( Attempted )
+		return Fallback;
+	Attempted = 1;
+
+	const TCHAR* Names[] =
+	{
+		TEXT("DefaultTexture"),
+		TEXT("Engine.DefaultTexture"),
+		TEXT("S_Actor"),
+		TEXT("Engine.S_Actor"),
+		TEXT("S_Light"),
+		TEXT("Engine.S_Light")
+	};
+	for( INT i=0; i<ARRAY_COUNT(Names); i++ )
+	{
+		UTexture* Candidate = FindObject<UTexture>( ANY_PACKAGE, Names[i] );
+		if( ValidateDrawWorldTexture( Candidate, TEXT("NamedFallbackTexture") ) )
+		{
+			Fallback = Candidate;
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V200_FALLBACK_TEXTURE source=name name=%s texture=%s"),
+				Names[i],
+				Fallback->GetFullName() );
+			return Fallback;
+		}
+	}
+
+	for( FObjectIterator It; It; ++It )
+	{
+		UObject* Object = *It;
+		if( Object && Object->IsA(UTexture::StaticClass()) )
+		{
+			Fallback = (UTexture*)Object;
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V200_FALLBACK_TEXTURE source=iterator texture=%s"),
+				Fallback->GetFullName() );
+			return Fallback;
+		}
+	}
+
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V200_FALLBACK_TEXTURE source=none") );
+	return NULL;
+	unguardSlow;
+}
+
+static UTexture* SafeDrawWorldTexture( UTexture* Texture, UTexture* LevelDefault, const TCHAR* Field )
+{
+	guardSlow(SafeDrawWorldTexture);
+	if( ValidateDrawWorldTexture( Texture, Field ) )
+	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V200_TEXTURE_SOURCE field=%s source=surface texture=%s"),
+			Field,
+			Texture->GetFullName() );
+#endif
+		return Texture;
+	}
+	if( ValidateDrawWorldTexture( LevelDefault, TEXT("Level.DefaultTexture") ) )
+	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V200_TEXTURE_SOURCE field=%s source=level_default texture=%s"),
+			Field,
+			LevelDefault->GetFullName() );
+#endif
+		return LevelDefault;
+	}
+	UTexture* ActorDefault = GetDefault<AActor>()->Texture;
+	if( ValidateDrawWorldTexture( ActorDefault, TEXT("Actor.Default.Texture") ) )
+	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V200_TEXTURE_SOURCE field=%s source=actor_default texture=%s"),
+			Field,
+			ActorDefault->GetFullName() );
+#endif
+		return ActorDefault;
+	}
+	UTexture* FoundDefault = FindDrawWorldFallbackTexture();
+	if( ValidateDrawWorldTexture( FoundDefault, TEXT("FoundFallbackTexture") ) )
+	{
+#if PLATFORM_ANDROID
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V200_TEXTURE_SOURCE field=%s source=found_default texture=%s"),
+			Field,
+			FoundDefault->GetFullName() );
+#endif
+		return FoundDefault;
+	}
+	debugf( NAME_Warning, TEXT("UT99_ANDROID_V200_NO_SAFE_TEXTURE field=%s texture=%p levelDefault=%p actorDefault=%p"),
+		Field,
+		Texture,
+		LevelDefault,
+		ActorDefault );
+	return NULL;
+	unguardSlow;
+}
+
 /*-----------------------------------------------------------------------------
 	Object implementations.
 -----------------------------------------------------------------------------*/
@@ -1205,6 +1347,8 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 	FVert*	  VertPool	= &GVerts[Node->iVertPool];
 	BYTE      Outcode   = FVF_OutReject;
 	BYTE      AllCodes  = 0;
+	FLOAT     MinZ      = 0.0;
+	FLOAT     MaxZ      = 0.0;
 	for( INT i=0; i<NumPts; i++ )
 	{
 		INT pPoint = VertPool[i].pVertex;
@@ -1217,12 +1361,40 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 			STAT(GStat.NumPoints++);
 		}
 		LocalPts[i] = S.Point;
+		if( i==0 || S.Point->Point.Z < MinZ )
+			MinZ = S.Point->Point.Z;
+		if( i==0 || S.Point->Point.Z > MaxZ )
+			MaxZ = S.Point->Point.Z;
 		BYTE Flags  = S.Point->Flags; 
 		Outcode    &= Flags;
 		AllCodes   |= Flags;
 	}
 	if( Outcode )
+	{
+#if PLATFORM_ANDROID
+		static INT AndroidClipOutcodeLogs = 0;
+		if( AndroidClipOutcodeLogs++ < 32 )
+		{
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V192_CLIP_REJECT stage=outcode node=%i surf=%i verts=%i out=0x%02x all=0x%02x minZ=%f maxZ=%f first=%f,%f,%f prj=%f,%f,%f,%f projZ=%f"),
+				iNode,
+				Node->iSurf,
+				NumPts,
+				Outcode,
+				AllCodes,
+				MinZ,
+				MaxZ,
+				LocalPts[0]->Point.X,
+				LocalPts[0]->Point.Y,
+				LocalPts[0]->Point.Z,
+				GFrame->PrjXM,
+				GFrame->PrjXP,
+				GFrame->PrjYM,
+				GFrame->PrjYP,
+				GFrame->Proj.Z );
+		}
+#endif
 		return 0;
+	}
 
 	// Clip.
 	STAT(GStat.NumClip++);
@@ -1236,7 +1408,14 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 				Dot[i] = GFrame->PrjXM * Pts[i]->Point.Z + Pts[i]->Point.X;
 			NumPts = Clip( LocalPts, Pts, NumPts );
 			if( !NumPts )
+			{
+#if PLATFORM_ANDROID
+				static INT AndroidClipXMinLogs = 0;
+				if( AndroidClipXMinLogs++ < 16 )
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V192_CLIP_REJECT stage=xmin node=%i surf=%i all=0x%02x minZ=%f maxZ=%f"), iNode, Node->iSurf, AllCodes, MinZ, MaxZ );
+#endif
 				return 0;
+			}
 			Pts = LocalPts;
 		}
 		if( AllCodes & FVF_OutXMax )
@@ -1246,7 +1425,14 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 				Dot[i] = GFrame->PrjXP * Pts[i]->Point.Z - Pts[i]->Point.X;
 			NumPts = Clip( LocalPts, Pts, NumPts );
 			if( !NumPts )
+			{
+#if PLATFORM_ANDROID
+				static INT AndroidClipXMaxLogs = 0;
+				if( AndroidClipXMaxLogs++ < 16 )
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V192_CLIP_REJECT stage=xmax node=%i surf=%i all=0x%02x minZ=%f maxZ=%f"), iNode, Node->iSurf, AllCodes, MinZ, MaxZ );
+#endif
 				return 0;
+			}
 			Pts = LocalPts;
 		}
 		if( AllCodes & FVF_OutYMin )
@@ -1256,7 +1442,14 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 				Dot[i] = GFrame->PrjYM * Pts[i]->Point.Z + Pts[i]->Point.Y;
 			NumPts = Clip( LocalPts, Pts, NumPts );
 			if( !NumPts )
+			{
+#if PLATFORM_ANDROID
+				static INT AndroidClipYMinLogs = 0;
+				if( AndroidClipYMinLogs++ < 16 )
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V192_CLIP_REJECT stage=ymin node=%i surf=%i all=0x%02x minZ=%f maxZ=%f"), iNode, Node->iSurf, AllCodes, MinZ, MaxZ );
+#endif
 				return 0;
+			}
 			Pts = LocalPts;
 		}
 		if( AllCodes & FVF_OutYMax )
@@ -1266,7 +1459,14 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 				Dot[i] = GFrame->PrjYP * Pts[i]->Point.Z - Pts[i]->Point.Y;
 			NumPts = Clip( LocalPts, Pts, NumPts );
 			if( !NumPts )
+			{
+#if PLATFORM_ANDROID
+				static INT AndroidClipYMaxLogs = 0;
+				if( AndroidClipYMaxLogs++ < 16 )
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V192_CLIP_REJECT stage=ymax node=%i surf=%i all=0x%02x minZ=%f maxZ=%f"), iNode, Node->iSurf, AllCodes, MinZ, MaxZ );
+#endif
 				return 0;
+			}
 			Pts = LocalPts;
 		}
 	}
@@ -1283,7 +1483,14 @@ INT URender::ClipBspSurf( INT iNode, FTransform**& Result )
 			static FTransform* LocalPts[FBspNode::MAX_FINAL_VERTICES];
 			NumPts = Clip( LocalPts, Pts, NumPts );
 			if( !NumPts )
+			{
+#if PLATFORM_ANDROID
+				static INT AndroidClipNearLogs = 0;
+				if( AndroidClipNearLogs++ < 16 )
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V192_CLIP_REJECT stage=near node=%i surf=%i all=0x%02x minZ=%f maxZ=%f near=%f,%f,%f,%f"), iNode, Node->iSurf, AllCodes, MinZ, MaxZ, GFrame->NearClip.X, GFrame->NearClip.Y, GFrame->NearClip.Z, GFrame->NearClip.W );
+#endif
 				return 0;
+			}
 			Pts = LocalPts;
 		}
 	}
@@ -1925,7 +2132,28 @@ void URender::OccludeBsp( FSceneNode* Frame )
 	INT					DrawBin;
 	INT                 NumActiveZones;
 	BYTE                ActiveZones[64];
+	INT AndroidRejectZoneFront = 0;
+	INT AndroidRejectZonePlane = 0;
+	INT AndroidRejectBound = 0;
+	INT AndroidRejectBoundSpan = 0;
+	INT AndroidRejectFrustum = 0;
+	INT AndroidRejectBackface = 0;
+	INT AndroidRejectPortalViewZone = 0;
+	INT AndroidRejectSpanEmpty = 0;
+	INT AndroidRejectClip = 0;
+	INT AndroidRejectRaster = 0;
+	INT AndroidRejectInvisible = 0;
+	INT AndroidRejectNotVisible = 0;
 	guard(URender::OccludeBsp);
+	if( Frame->Level->Model->Nodes.Num()>MAX_NODES || Frame->Level->Model->Points.Num()>MAX_POINTS )
+	{
+		debugf( NAME_Warning, TEXT("UT99_ANDROID_V184_RENDER_MODEL_LIMIT map=%s nodes=%i maxNodes=%i points=%i maxPoints=%i"),
+			Frame->Level->GetOuter()->GetName(),
+			Frame->Level->Model->Nodes.Num(),
+			MAX_NODES,
+			Frame->Level->Model->Points.Num(),
+			MAX_POINTS );
+	}
 	check(Frame->Level->Model->Nodes.Num()<=MAX_NODES);
 	check(Frame->Level->Model->Points.Num()<=MAX_POINTS);
 
@@ -1953,6 +2181,15 @@ void URender::OccludeBsp( FSceneNode* Frame )
 #else
 	iViewZone			= Frame->ZoneNumber;
 #endif
+#if PLATFORM_ANDROID
+	if( iViewZone != 0 )
+	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V191_ZONE_FILTER_DISABLE frameZone=%i actorZone=%i usingViewZone=0"),
+			iViewZone,
+			Viewport->Actor->Region.ZoneNumber );
+		iViewZone = 0;
+	}
+#endif
 	ViewZoneMask		= iViewZone ? ~0 : 0;
 	NumActiveZones      = 1;
 	ActiveZones[0]      = iViewZone;
@@ -1968,6 +2205,28 @@ void URender::OccludeBsp( FSceneNode* Frame )
 	GPoints				= &Model->Points;
 	FLOAT TimeSeconds   = Frame->Level->GetLevelInfo()->TimeSeconds;
 	Model->Zones[iViewZone].LastRenderTime = TimeSeconds;
+	static INT AndroidOccludeTraceCount = 0;
+	AndroidOccludeTraceCount++;
+	if( AndroidOccludeTraceCount <= 12 || (AndroidOccludeTraceCount % 60) == 0 )
+	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V190_OCCLUDE_BEGIN count=%i map=%s frameZone=%i viewZone=%i actorZone=%i actorLeaf=%i validLines=%i nodes=%i surfs=%i points=%i rootOutside=%i origin=%f,%f,%f show=0x%08x rend=%i"),
+			AndroidOccludeTraceCount,
+			Frame->Level->GetOuter()->GetName(),
+			Frame->ZoneNumber,
+			iViewZone,
+			Viewport->Actor->Region.ZoneNumber,
+			Viewport->Actor->Region.iLeaf,
+			Frame->Span ? Frame->Span->ValidLines : -1,
+			Model->Nodes.Num(),
+			Model->Surfs.Num(),
+			Model->Points.Num(),
+			Model->RootOutside,
+			Origin.X,
+			Origin.Y,
+			Origin.Z,
+			Viewport->Actor->ShowFlags,
+			Viewport->Actor->RendMap );
+	}
 
 	// If inside a warp zone, skip out and give this span buffer to the other side.
 	AWarpZoneInfo* Warp = (AWarpZoneInfo*)Model->Zones[iViewZone].ZoneActor;
@@ -2015,6 +2274,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 			if( iViewZone && !(Node->ZoneMask & ActiveZoneMask))
 			{
 				// Use pure zone rejection.
+				AndroidRejectZoneFront++;
 				STAT(GStat.MaskRejectZones++);
 				goto PopStack;
 			}
@@ -2036,6 +2296,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 					FScreenBounds Results;
 					if( !BoundVisible(Frame,&Model->Bounds(Node->iRenderBound),iViewZone?NULL:&ZoneSpanBuffer[0],Results) )
 					{
+						AndroidRejectBound++;
 						Node->NodeFlags |= NF_BoxOccluded;
 						goto PopStack;
 					}
@@ -2052,6 +2313,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 						}
 						if( i==NumActiveZones )
 						{
+							AndroidRejectBoundSpan++;
 							STAT(GStat.BoxSpanOccluded++;);
 							Node->NodeFlags |= NF_BoxOccluded;
 							goto PopStack;
@@ -2094,6 +2356,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 			// Zone mask rejection.
 			if( iViewZone && !(Node->ZoneMask & ActiveZoneMask) )
 			{
+				AndroidRejectZonePlane++;
 				STAT(GStat.MaskRejectZones++);
 				goto PopStack;
 			}
@@ -2118,7 +2381,10 @@ void URender::OccludeBsp( FSceneNode* Frame )
 			&&	(Sign * (Node->Plane | Frame->ViewSides[1]) > 0.0)
 			&&	(Sign * (Node->Plane | Frame->ViewSides[2]) > 0.0)
 			&&	(Sign * (Node->Plane | Frame->ViewSides[3]) > 0.0) )
+			{
+				AndroidRejectFrustum++;
 				goto PopStack;
+			}
 
 			// Process node and all of its coplanars.
 			for( ;; )
@@ -2126,12 +2392,57 @@ void URender::OccludeBsp( FSceneNode* Frame )
 				// Note: Can't zone mask reject coplanars due to moving brush rules.
 				Poly		= &GSurfs[Node->iSurf];
 				PolyFlags	= Poly->PolyFlags | ExtraPolyFlags;
+#if PLATFORM_ANDROID
+				if( Poly->Texture && !IsKnownDrawWorldObject( Poly->Texture ) )
+				{
+					debugf( NAME_Warning, TEXT("UT99_ANDROID_V195_BAD_BSP_TEXTURE node=%i surf=%i texture=%p"),
+						iNode,
+						Node->iSurf,
+						Poly->Texture );
+					Poly->Texture = NULL;
+				}
+				if( Poly->Texture && Poly->Texture->Palette && !IsKnownDrawWorldObject( Poly->Texture->Palette ) )
+				{
+					debugf( NAME_Warning, TEXT("UT99_ANDROID_V195_BAD_BSP_PALETTE node=%i surf=%i texture=%s palette=%p"),
+						iNode,
+						Node->iSurf,
+						Poly->Texture->GetFullName(),
+						Poly->Texture->Palette );
+					Poly->Texture = NULL;
+				}
+#endif
 
 				// Backface and portal reject.
 				if( !IsFront && Dot<-1.0 && !(PolyFlags & (PF_TwoSided|PF_Portal)) )
+				{
+					AndroidRejectBackface++;
+#if PLATFORM_ANDROID
+					static INT AndroidBackfaceLogs = 0;
+					if( AndroidBackfaceLogs++ < 32 )
+					{
+						debugf( NAME_Log, TEXT("UT99_ANDROID_V192_BACKFACE_REJECT node=%i surf=%i zoneF=%i zoneB=%i flags=0x%08x dot=%f plane=%f,%f,%f,%f origin=%f,%f,%f"),
+							iNode,
+							Node->iSurf,
+							Node->iZone[0],
+							Node->iZone[1],
+							PolyFlags,
+							Dot,
+							Node->Plane.X,
+							Node->Plane.Y,
+							Node->Plane.Z,
+							Node->Plane.W,
+							Origin.X,
+							Origin.Y,
+							Origin.Z );
+					}
+#endif
 					goto NextCoplanar;
+				}
 				if( (PolyFlags & PF_Portal) && iViewZone==0 )
+				{
+					AndroidRejectPortalViewZone++;
 					goto NextCoplanar;
+				}
 
 #if defined(LEGEND) //LEGEND
 				// check with PlayerPawn rendering-control interface (RCI) regarding visisble polys
@@ -2152,7 +2463,10 @@ void URender::OccludeBsp( FSceneNode* Frame )
 
 				// Span reject.
 				if( SpanBuffer->ValidLines <= 0 )
+				{
+					AndroidRejectSpanEmpty++;
 					goto NextCoplanar;
+				}
 
 				// Clip it.
 				STAT(clock(GStat.ClipTime));
@@ -2160,7 +2474,10 @@ void URender::OccludeBsp( FSceneNode* Frame )
 				NumPts = ClipBspSurf( iNode, Pts );
 				STAT(unclock(GStat.ClipTime));
 				if( !NumPts )
+				{
+					AndroidRejectClip++;
 					goto NextCoplanar;
+				}
 
 				//begin code to force rendering of "sliver" polygons
 				/*ForceRender=0;
@@ -2203,6 +2520,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 				if( !SetupRaster( Pts, NumPts, (Node->NodeFlags & NF_PolyOccluded) ? SpanBuffer : NULL, Frame->Y ) )
 				{
 					STAT(unclock(GStat.RasterTime));
+					AndroidRejectRaster++;
 					goto NextCoplanar;
 				}
 				STAT(unclock(GStat.RasterTime));
@@ -2242,6 +2560,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 				if( !Visible )
 				{
 					// Rejected, span buffer wasn't affected.
+					AndroidRejectNotVisible++;
 					Node->NodeFlags |= NF_PolyOccluded;
 					TempDrawList->Span.Release();
 				}
@@ -2413,6 +2732,14 @@ void URender::OccludeBsp( FSceneNode* Frame )
 						TempDrawList->iNode		 = iNode;
 						TempDrawList->iZone		 = Node->iZone[IsFront];
 						TempDrawList->Zone       = Frame->Level->GetZoneActor(TempDrawList->iZone);
+#if PLATFORM_ANDROID
+						if( !ValidateDrawWorldObject( TempDrawList->Zone, TEXT("BspDraw.Zone") ) )
+						{
+							TempDrawList->Zone = Viewport->Actor->Region.Zone;
+							if( !ValidateDrawWorldObject( TempDrawList->Zone, TEXT("BspDraw.ActorRegionZone") ) )
+								TempDrawList->Zone = NULL;
+						}
+#endif
 						TempDrawList->iSurf		 = Node->iSurf;
 						TempDrawList->PolyFlags	 = PolyFlags;
 						TempDrawList->Next       = Frame->Draw[DrawBin];
@@ -2441,7 +2768,7 @@ void URender::OccludeBsp( FSceneNode* Frame )
 						}
 
 						// Sort key.
-						TempDrawList->Key = TempDrawList->Zone->GetIndex() << (32-6);
+						TempDrawList->Key = TempDrawList->Zone ? TempDrawList->Zone->GetIndex() << (32-6) : 0;
 						if( Poly->Texture )
 						{
 							TempDrawList->Key += Poly->Texture->GetIndex();
@@ -2501,6 +2828,10 @@ void URender::OccludeBsp( FSceneNode* Frame )
 							goto DoneRendering;
 					}
 				}
+				else
+				{
+					AndroidRejectInvisible++;
+				}
 
 				NextCoplanar:
 				iNode = Node->iPlane;
@@ -2553,6 +2884,35 @@ void URender::OccludeBsp( FSceneNode* Frame )
 	for( i=0; i<FBspNode::MAX_ZONES; i++ )
 		if( ZoneSpanBuffer[i].EndY )
 			STAT(GStat.VisibleZones++);
+	if( AndroidOccludeTraceCount <= 12 || (AndroidOccludeTraceCount % 60) == 0 )
+	{
+		INT DrawCounts[3] = {0,0,0};
+		for( INT PassIndex=0; PassIndex<3; PassIndex++ )
+			for( FBspDrawList* Draw=Frame->Draw[PassIndex]; Draw; Draw=Draw->Next )
+				DrawCounts[PassIndex]++;
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V190_OCCLUDE_DONE count=%i nodesDraw=%i polysDraw=%i draw0=%i draw1=%i draw2=%i activeZones=%i mask=0x%08x%08x rejectZoneFront=%i rejectZonePlane=%i rejectBound=%i rejectBoundSpan=%i rejectFrustum=%i rejectBackface=%i rejectPortalViewZone=%i rejectSpanEmpty=%i rejectClip=%i rejectRaster=%i rejectInvisible=%i rejectNotVisible=%i"),
+			AndroidOccludeTraceCount,
+			NodesDraw,
+			PolysDraw,
+			DrawCounts[0],
+			DrawCounts[1],
+			DrawCounts[2],
+			NumActiveZones,
+			(DWORD)(ActiveZoneMask >> 32),
+			(DWORD)ActiveZoneMask,
+			AndroidRejectZoneFront,
+			AndroidRejectZonePlane,
+			AndroidRejectBound,
+			AndroidRejectBoundSpan,
+			AndroidRejectFrustum,
+			AndroidRejectBackface,
+			AndroidRejectPortalViewZone,
+			AndroidRejectSpanEmpty,
+			AndroidRejectClip,
+			AndroidRejectRaster,
+			AndroidRejectInvisible,
+			AndroidRejectNotVisible );
+	}
 
 	STAT(unclock(GStat.OcclusionTime));
 	unguard;
@@ -2703,6 +3063,20 @@ void URender::DrawFrame( FSceneNode* Frame )
 	for( INT Pass=0; Pass<3; Pass++ )
 		for( FBspDrawList* Draw = Frame->Draw[Pass]; Draw; Draw = Draw->Next )
 			Num[Pass]++;
+	static INT AndroidDrawFrameTraceCount = 0;
+	AndroidDrawFrameTraceCount++;
+	if( AndroidDrawFrameTraceCount <= 12 || (AndroidDrawFrameTraceCount % 60) == 0 )
+	{
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V190_DRAWFRAME count=%i zone=%i draws=%i,%i,%i sprites=%i child=%i spanLines=%i"),
+			AndroidDrawFrameTraceCount,
+			Frame->ZoneNumber,
+			Num[0],
+			Num[1],
+			Num[2],
+			Frame->Sprite != NULL,
+			Frame->Child != NULL,
+			Frame->Span ? Frame->Span->ValidLines : -1 );
+	}
 
 	// Group surfaces into solid (draw-order invariant) and transparent.
 	FBspDrawListPtr* FirstDraw [3];
@@ -2718,7 +3092,13 @@ void URender::DrawFrame( FSceneNode* Frame )
 		Exchange( FirstDraw[0][i], FirstDraw[0][Num[0]-i-1] );
 
 	// Sort solid surfaces by texture and then by palette for cache coherence.
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_sort count=%i draw1=%i"), AndroidDrawFrameTraceCount, Num[1] );
+#endif
 	Sort( FirstDraw[1], Num[1] );
+#if PLATFORM_ANDROID
+	debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=after_sort count=%i"), AndroidDrawFrameTraceCount );
+#endif
 
 	// Render everything.
 	for( Pass=0; Pass<3; Pass++ )
@@ -2729,9 +3109,32 @@ void URender::DrawFrame( FSceneNode* Frame )
 			// Setup for this surface.
 			FBspDrawList*	Draw = DrawPtr->Ptr;
 			FBspSurf*		Surf = &Model->Surfs( Draw->iSurf );
+#if PLATFORM_ANDROID
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=surface_begin count=%i pass=%i draw=%p iNode=%i iSurf=%i iZone=%i zone=%p flags=0x%08x surfTex=%p"),
+				AndroidDrawFrameTraceCount,
+				Pass,
+				Draw,
+				Draw->iNode,
+				Draw->iSurf,
+				Draw->iZone,
+				Draw->Zone,
+				Draw->PolyFlags,
+				Surf->Texture );
+#endif
 
 			// Compute texture LOD.
-			UTexture* Texture = Surf->Texture ? Surf->Texture->Get(Viewport->CurrentTime) : Viewport->Actor->Level->DefaultTexture;
+			UTexture* Texture = Surf->Texture ? Surf->Texture->Get(Viewport->CurrentTime) : NULL;
+#if PLATFORM_ANDROID
+			Texture = SafeDrawWorldTexture( Texture, Viewport->Actor->Level->DefaultTexture, TEXT("DrawFrame.Texture") );
+			if( !Texture )
+				continue;
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=texture count=%i pass=%i surf=%i texture=%s default=%i"),
+				AndroidDrawFrameTraceCount,
+				Pass,
+				Draw->iSurf,
+				Texture ? Texture->GetFullName() : TEXT("None"),
+				Texture == Viewport->Actor->Level->DefaultTexture );
+#endif
 			/*INT TextureLOD=0;
 			if( !Viewport->RenDev->SpanBased )
 			{
@@ -2746,12 +3149,12 @@ void URender::DrawFrame( FSceneNode* Frame )
 
 			// Setup panning.
 			FLOAT PanU = Surf->PanU;
-			if( Surf->PolyFlags & PF_AutoUPan )
+			if( (Surf->PolyFlags & PF_AutoUPan) && Draw->Zone )
 			{
 				PanU += ((INT)(Frame->Level->GetLevelInfo()->TimeSeconds * 35.f * Draw->Zone->TexUPanSpeed * 256.0)&0x3ffff)/256.0;
 			}
 			FLOAT PanV = Surf->PanV;
-			if( Surf->PolyFlags & PF_AutoVPan )
+			if( (Surf->PolyFlags & PF_AutoVPan) && Draw->Zone )
 			{
 				PanV += ((INT)(Frame->Level->GetLevelInfo()->TimeSeconds * 35.f * Draw->Zone->TexVPanSpeed * 256.0)&0x3ffff)/256.0;
 			}
@@ -2773,28 +3176,72 @@ void URender::DrawFrame( FSceneNode* Frame )
 
 			// Make TextureMap.
 			FTextureInfo TextureMap;
+#if PLATFORM_ANDROID
+			appMemzero( &TextureMap, sizeof(TextureMap) );
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_lock count=%i surf=%i texture=%s"), AndroidDrawFrameTraceCount, Draw->iSurf, Texture->GetFullName() );
+#endif
 			Texture->Lock( TextureMap, Viewport->CurrentTime, TextureLOD, Viewport->RenDev );
+#if PLATFORM_ANDROID
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=after_lock count=%i surf=%i texInfoTexture=%p cache=0x%08x%08x format=%i mips=%i size=%ix%i clamp=%ix%i palette=%p mip0=%p data0=%p"),
+				AndroidDrawFrameTraceCount,
+				Draw->iSurf,
+				TextureMap.Texture,
+				(DWORD)(TextureMap.CacheID >> 32),
+				(DWORD)TextureMap.CacheID,
+				TextureMap.Format,
+				TextureMap.NumMips,
+				TextureMap.USize,
+				TextureMap.VSize,
+				TextureMap.UClamp,
+				TextureMap.VClamp,
+				TextureMap.Palette,
+				TextureMap.Mips[0],
+				TextureMap.Mips[0] ? TextureMap.Mips[0]->DataPtr : NULL );
+			if( TextureMap.NumMips <= 0 || !TextureMap.Mips[0] || !TextureMap.Mips[0]->DataPtr || TextureMap.USize <= 0 || TextureMap.VSize <= 0 )
+			{
+				debugf( NAME_Warning, TEXT("UT99_ANDROID_V198_SKIP_BAD_TEXTURE surf=%i texture=%s"), Draw->iSurf, Texture->GetFullName() );
+				continue;
+			}
+#endif
 			TextureMap.Pan			= FVector( -PanU, -PanV, 0 );
 			Surface.Texture			= &TextureMap;
 
 			// Make DetailTexture.
 			FTextureInfo DetailTexture;
-			if( Texture->DetailTexture && !(Surface.PolyFlags & PF_Portal) && TextureLOD<2 && UTexture::__Client && UTexture::__Client->TextureLODSet[LODSET_World]==0 )
+			if( Texture->DetailTexture && ValidateDrawWorldObject( Texture->DetailTexture, TEXT("DrawFrame.DetailTexture") ) && !(Surface.PolyFlags & PF_Portal) && TextureLOD<2 && UTexture::__Client && UTexture::__Client->TextureLODSet[LODSET_World]==0 )
 			{
+#if PLATFORM_ANDROID
+				appMemzero( &DetailTexture, sizeof(DetailTexture) );
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_detail_lock surf=%i detail=%s"), Draw->iSurf, Texture->DetailTexture->GetFullName() );
+#endif
 				Texture->DetailTexture->Lock( DetailTexture, Viewport->CurrentTime, -1, Viewport->RenDev );
 				Surface.DetailTexture = &DetailTexture;
 			}
 
 			// Make MacroTexture.
 			FTextureInfo MacroTexture;
-			if( Texture->MacroTexture )
+			if( Texture->MacroTexture && ValidateDrawWorldObject( Texture->MacroTexture, TEXT("DrawFrame.MacroTexture") ) )
 			{
+#if PLATFORM_ANDROID
+				appMemzero( &MacroTexture, sizeof(MacroTexture) );
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_macro_lock surf=%i macro=%s"), Draw->iSurf, Texture->MacroTexture->GetFullName() );
+#endif
 				Texture->MacroTexture->Lock( MacroTexture, Viewport->CurrentTime, -1, Viewport->RenDev );
 				Surface.MacroTexture = &MacroTexture;
 			}
 
 			// Make SurfaceFacet.
 			FSurfaceFacet Facet;
+#if PLATFORM_ANDROID
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_facet surf=%i pBase=%i vU=%i vV=%i vN=%i points=%i vectors=%i"),
+				Draw->iSurf,
+				Surf->pBase,
+				Surf->vTextureU,
+				Surf->vTextureV,
+				Surf->vNormal,
+				Model->Points.Num(),
+				Model->Vectors.Num() );
+#endif
 			Facet.Polys = Draw->Polys;
 			Facet.Span = &Draw->Span;
 			Facet.MapCoords = FCoords
@@ -2811,6 +3258,10 @@ void URender::DrawFrame( FSceneNode* Frame )
 			&&	Viewport->Actor->RendMap==REN_DynLight
 			&&	Model->LightMap.Num() 
 			&&	!Viewport->GetOuterUClient()->NoLighting )
+			{
+#if PLATFORM_ANDROID
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_light surf=%i lightMap=%i"), Draw->iSurf, Surf->iLightMap );
+#endif
 				GLightManager->SetupForSurf
 				(
 					Frame,
@@ -2820,8 +3271,15 @@ void URender::DrawFrame( FSceneNode* Frame )
 					Surface.FogMap,
 					Pass==0
 				);
+#if PLATFORM_ANDROID
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=after_light surf=%i light=%p fog=%p"), Draw->iSurf, Surface.LightMap, Surface.FogMap );
+#endif
+			}
 
 			// Update facet.
+#if PLATFORM_ANDROID
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_facet_transform surf=%i"), Draw->iSurf );
+#endif
 			Facet.MapCoords *= Frame->Coords;
 
 			// Handle flatshading.
@@ -2833,7 +3291,15 @@ void URender::DrawFrame( FSceneNode* Frame )
 				UModel*		Model		= Viewport->Actor->GetLevel()->Model;
 				FBspNode*	Node 		= &Model->Nodes( Draw->iNode );
 				FBspSurf*	Surf 		= &Model->Surfs( Node->iSurf );
-				UTexture*	Texture		= Surf->Texture ? Surf->Texture->Get(Viewport->CurrentTime) : Viewport->Actor->Level->DefaultTexture;
+				UTexture*	Texture		= Surf->Texture ? Surf->Texture->Get(Viewport->CurrentTime) : NULL;
+#if PLATFORM_ANDROID
+				Texture = SafeDrawWorldTexture( Texture, Viewport->Actor->Level->DefaultTexture, TEXT("DrawFrame.FlatTexture") );
+				if( !Texture )
+					continue;
+#else
+				if( !Texture )
+					Texture = Viewport->Actor->Level->DefaultTexture;
+#endif
 				FVector Color;
 				if( Viewport->Actor->RendMap==REN_Polys )
 				{
@@ -2858,11 +3324,24 @@ void URender::DrawFrame( FSceneNode* Frame )
 			}
 
 			// Draw the surface.
+#if PLATFORM_ANDROID
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=before_drawcomplex surf=%i texture=%s polyFlags=0x%08x light=%p fog=%p detail=%p macro=%p"),
+				Draw->iSurf,
+				Texture->GetFullName(),
+				Surface.PolyFlags,
+				Surface.LightMap,
+				Surface.FogMap,
+				Surface.DetailTexture,
+				Surface.MacroTexture );
+#endif
 			PUSH_HIT(Frame,HBspSurf(Draw->iSurf));
 			STAT(clock(GStat.PolyVTime));
 			Viewport->RenDev->DrawComplexSurface( Frame, Surface, Facet );
 			STAT(unclock(GStat.PolyVTime));
 			POP_HIT(Frame);
+#if PLATFORM_ANDROID
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V198_DRAWFRAME_STAGE stage=after_drawcomplex surf=%i"), Draw->iSurf );
+#endif
 
 #ifndef NODECALS
 			guard(DrawDecals);
@@ -2880,7 +3359,15 @@ void URender::DrawFrame( FSceneNode* Frame )
 					if( !LockedTexture )
 					{
 						guardSlow(LockDecalTexture);
-						DecalTexture = DecalIt->Actor->Texture ? DecalIt->Actor->Texture->Get(Viewport->CurrentTime) : Viewport->Actor->Level->DefaultTexture;
+						DecalTexture = DecalIt->Actor->Texture ? DecalIt->Actor->Texture->Get(Viewport->CurrentTime) : NULL;
+#if PLATFORM_ANDROID
+						DecalTexture = SafeDrawWorldTexture( DecalTexture, Viewport->Actor->Level->DefaultTexture, TEXT("DrawFrame.DecalTexture") );
+						if( !DecalTexture )
+							continue;
+#else
+						if( !DecalTexture )
+							DecalTexture = Viewport->Actor->Level->DefaultTexture;
+#endif
 						DecalTexture->Lock( DecalTextureInfo, Viewport->CurrentTime, -1, Viewport->RenDev );
 						unguardSlow;
 					}
@@ -3190,6 +3677,10 @@ void URender::DrawWorld( FSceneNode* Frame )
 		OccludeFrame( Frame );
 		DrawFrame( Frame );
 	// Have HUD draw the player's weapon on top (and any other overlays which should happen before screen flashes). 
+	if( !ValidateDrawWorldObject( Frame->Viewport->Actor->ViewTarget, TEXT("Viewport.Actor.ViewTarget") ) )
+		Frame->Viewport->Actor->ViewTarget = NULL;
+	if( !ValidateDrawWorldObject( Frame->Viewport->Canvas, TEXT("Viewport.Canvas") ) )
+		Frame->Viewport->Canvas = NULL;
 	AActor* Actor
 	= Frame->Viewport->Actor->bBehindView ? NULL 
 	: Frame->Viewport->Actor->ViewTarget ? Frame->Viewport->Actor->ViewTarget
@@ -3199,9 +3690,7 @@ void URender::DrawWorld( FSceneNode* Frame )
 	&&	Actor
 	&&	(Frame->Viewport->Actor->ShowFlags & SHOW_Actors) )
 	{
-		// WORKAROUND: Skip RenderOverlays if Actor or Canvas is invalid
-		// This happens on Dreamcast due to GCC/MSVC bitfield differences
-		if( Actor && Actor->GetClass() && Frame->Viewport->Canvas && Frame->Viewport->Canvas->GetClass() )
+		if( ValidateDrawWorldObject( Actor, TEXT("Overlay.Actor") ) && Frame->Viewport->Canvas )
 		{
 			GUglyHackFlags|=1;
 			Actor->eventRenderOverlays(Frame->Viewport->Canvas);

@@ -3401,11 +3401,29 @@ public:
 		unguard;
 	}
 private:
+	static UBOOL IsKnownObjectPointer( UObject* Obj )
+	{
+		guardSlow(FArchiveTagUsed::IsKnownObjectPointer);
+		if( !Obj )
+			return 0;
+		for( INT i=0; i<UObject::GObjObjects.Num(); i++ )
+			if( UObject::GObjObjects(i)==Obj )
+				return 1;
+		return 0;
+		unguardSlow;
+	}
 	FArchive& operator<<( UObject*& Obj )
 	{
 		guardSlow(FArchiveTagUsed<<Obj);
 
 		GGarbageRefCount++;
+
+		if( Obj && !IsKnownObjectPointer( Obj ) )
+		{
+			debugf( NAME_Warning, TEXT("UT99_ANDROID_V160_GC_BAD_REF context=%s"), Context ? Context->GetFullName() : TEXT("NULL") );
+			Obj = NULL;
+			return *this;
+		}
 
 #if DO_GUARD_SLOW
 		guard(CheckValid);

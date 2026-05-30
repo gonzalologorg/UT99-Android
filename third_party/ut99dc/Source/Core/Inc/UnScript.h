@@ -85,6 +85,8 @@ BYTE CORE_API GRegisterNative( INT iNative, const Native& Func );
 //
 #define PRE_ITERATOR \
 	INT wEndOffset = Stack.ReadWord(); \
+	if( wEndOffset!=MAXWORD && Stack.Node ) \
+		wEndOffset = Stack.Node->RemapScriptOffset( wEndOffset ); \
 	BYTE B=0, Buffer[MAX_CONST_SIZE]; \
 	BYTE *StartCode = Stack.Code; \
 	do {

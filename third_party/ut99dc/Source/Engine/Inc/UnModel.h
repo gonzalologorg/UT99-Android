@@ -13,8 +13,13 @@
 //
 // Model objects are used for brushes and for the level itself.
 //
+#if PLATFORM_ANDROID
+enum {MAX_NODES  = 65536};
+enum {MAX_POINTS = 131072};
+#else
 enum {MAX_NODES  = 4096};
 enum {MAX_POINTS = 8192};
+#endif
 class ENGINE_API UModel : public UPrimitive
 {
 #ifndef NODECALS

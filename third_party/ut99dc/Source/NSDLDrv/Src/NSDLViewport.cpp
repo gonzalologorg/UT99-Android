@@ -265,6 +265,9 @@ void UNSDLViewport::OpenWindow( DWORD InParentWindow, UBOOL Temporary, INT NewX,
 	UBOOL DoOpenGL=0;
 	UBOOL NoHard=ParseParam( appCmdLine(), "nohard" );
 	SDL_GLprofile GLProfile = SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
+#if defined(__ANDROID__)
+	GLProfile = SDL_GL_CONTEXT_PROFILE_ES;
+#endif
 
 	// Clamp invalid sizes – SDL textures can't be 0x0
 	// If no size specified, try to read from config
@@ -309,7 +312,7 @@ void UNSDLViewport::OpenWindow( DWORD InParentWindow, UBOOL Temporary, INT NewX,
 			DoOpenGL = 1;
 		}
 		if( DoOpenGL && Temp.InStr(TEXT("GLES")) != INDEX_NONE )
-			GLProfile = SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
+			GLProfile = SDL_GL_CONTEXT_PROFILE_ES;
 	}
 
 	// User window of launcher if no parent window was specified.
@@ -344,7 +347,7 @@ void UNSDLViewport::OpenWindow( DWORD InParentWindow, UBOOL Temporary, INT NewX,
 		{
 			Flags |= SDL_WINDOW_OPENGL;
 		}
-		debugf( NAME_Log, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE OpenWindow flags=0x%08X doOpenGL=%i"), Flags, DoOpenGL );
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE OpenWindow flags=0x%08X doOpenGL=%i glProfile=%i"), Flags, DoOpenGL, GLProfile );
 
 		// Set OpenGL attributes if needed.
 		if( DoOpenGL )
@@ -638,6 +641,7 @@ void UNSDLViewport::Unlock( UBOOL Blit )
 {
 	guard(UNSDLViewport::Unlock);
 	static INT UnlockTraceCount = 0;
+	UnlockTraceCount++;
 
 	Client->DrawCycles=0;
 	clock(Client->DrawCycles);
@@ -652,8 +656,8 @@ void UNSDLViewport::Unlock( UBOOL Blit )
 		{
 
 			SDL_GL_SwapWindow( hWnd );
-			if( UnlockTraceCount < 5 )
-				debugf( NAME_Log, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE Unlock presented GL count=%i"), UnlockTraceCount );
+			if( UnlockTraceCount <= 12 || (UnlockTraceCount % 60) == 0 )
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V189_VIEWPORT_PRESENT count=%i backend=GL size=%ix%i"), UnlockTraceCount, SizeX, SizeY );
 		}
 		else if( SDLRen && SDLTex )
 		{
@@ -661,20 +665,18 @@ void UNSDLViewport::Unlock( UBOOL Blit )
 			SDL_UnlockTexture( SDLTex );
 			SDL_RenderCopy( SDLRen, SDLTex, NULL, NULL );
 			SDL_RenderPresent( SDLRen );
-			if( UnlockTraceCount < 5 )
-				debugf( NAME_Log, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE Unlock presented SDL count=%i"), UnlockTraceCount );
+			if( UnlockTraceCount <= 12 || (UnlockTraceCount % 60) == 0 )
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V189_VIEWPORT_PRESENT count=%i backend=SDL size=%ix%i"), UnlockTraceCount, SizeX, SizeY );
 		}
-		else if( UnlockTraceCount < 5 )
+		else if( UnlockTraceCount <= 12 || (UnlockTraceCount % 60) == 0 )
 		{
-			debugf( NAME_Log, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE Unlock skipped present missing backend GLCtx=%i SDLRen=%i SDLTex=%i"), GLCtx != NULL, SDLRen != NULL, SDLTex != NULL );
+			debugf( NAME_Log, TEXT("UT99_ANDROID_V189_VIEWPORT_PRESENT_SKIPPED count=%i reason=missing_backend GLCtx=%i SDLRen=%i SDLTex=%i"), UnlockTraceCount, GLCtx != NULL, SDLRen != NULL, SDLTex != NULL );
 		}
 	}
-	else if( UnlockTraceCount < 5 )
+	else if( UnlockTraceCount <= 12 || (UnlockTraceCount % 60) == 0 )
 	{
-		debugf( NAME_Log, TEXT("UT99_ANDROID_V141_VIEWPORT_TRACE Unlock skipped Blit=%i hWnd=%i HoldCount=%i"), Blit, hWnd != NULL, HoldCount );
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V189_VIEWPORT_PRESENT_SKIPPED count=%i reason=state Blit=%i hWnd=%i HoldCount=%i"), UnlockTraceCount, Blit, hWnd != NULL, HoldCount );
 	}
-	if( UnlockTraceCount < 5 )
-		UnlockTraceCount++;
 
 	unclock(Client->DrawCycles);
 
@@ -712,8 +714,15 @@ void UNSDLViewport::MakeCurrent()
 void UNSDLViewport::Repaint( UBOOL Blit )
 {
 	guard(UNSDLViewport::Repaint);
+	static INT RepaintTraceCount = 0;
+	RepaintTraceCount++;
+	if( RepaintTraceCount <= 12 || (RepaintTraceCount % 60) == 0 )
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V189_REPAINT begin count=%i blit=%i hold=%i rendev=%i size=%ix%i"),
+			RepaintTraceCount, Blit, HoldCount, RenDev != NULL, SizeX, SizeY );
 	if( HoldCount == 0 && RenDev && SizeX && SizeY )
 		Client->Engine->Draw( this, Blit );
+	if( RepaintTraceCount <= 12 || (RepaintTraceCount % 60) == 0 )
+		debugf( NAME_Log, TEXT("UT99_ANDROID_V189_REPAINT done count=%i"), RepaintTraceCount );
 	unguard;
 }
 

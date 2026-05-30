@@ -193,6 +193,15 @@ class CORE_API UStruct : public UField
 			return Offset;
 		if( Offset>=0 && Offset<ScriptCompatToNative.Num() && ScriptCompatToNative(Offset)!=INDEX_NONE )
 			return ScriptCompatToNative(Offset);
+		if( Offset>=0 && Offset<ScriptCompatToNative.Num() )
+		{
+			for( INT i=Offset-1; i>=0; i-- )
+				if( ScriptCompatToNative(i)!=INDEX_NONE )
+				{
+					INT NativeOffset = ScriptCompatToNative(i) + (Offset-i);
+					return Min( NativeOffset, Script.Num() );
+				}
+		}
 		return Offset;
 	}
 	UBOOL IsChildOf( const UStruct* SomeBase ) const

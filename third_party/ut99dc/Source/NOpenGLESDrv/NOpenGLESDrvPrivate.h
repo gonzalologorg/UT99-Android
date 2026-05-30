@@ -184,11 +184,60 @@ private:
 	{
 		if( IdxCount )
 		{
+			const INT IndexElems = IdxDataPtr - IdxData;
+			const INT VertexFloats = VtxDataPtr - VtxData;
+			const INT VertexBytes = (BYTE*)VtxDataPtr - (BYTE*)VtxData;
+#if PLATFORM_ANDROID
+			static INT AndroidFlushLogCount = 0;
+			const UBOOL AndroidDoLog = AndroidFlushLogCount < 32 || ((AndroidFlushLogCount % 60) == 0);
+			AndroidFlushLogCount++;
+			if( AndroidDoLog )
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V197_GLES_FLUSH_BEGIN count=%i useVBO=%i idxCount=%i idxElems=%i vtxFloats=%i vtxBytes=%i vtxCap=%i idxCap=%i shader=0x%08x poly=0x%08x glerr=0x%04x"),
+					AndroidFlushLogCount,
+					UseVAO,
+					IdxCount,
+					IndexElems,
+					VertexFloats,
+					VertexBytes,
+					VtxDataSize,
+					IdxDataSize,
+					ShaderInfo ? ShaderInfo->Flags : 0,
+					CurrentPolyFlags,
+					(DWORD)glGetError() );
+			if( IdxDataPtr > IdxDataEnd || VtxDataPtr > VtxDataEnd )
+			{
+				debugf( NAME_Warning, TEXT("UT99_ANDROID_V197_GLES_FLUSH_OVERFLOW idxElems=%i idxCap=%i vtxFloats=%i vtxCap=%i"),
+					IndexElems,
+					IdxDataSize,
+					VertexFloats,
+					VtxDataSize );
+				IdxCount = 0;
+				VtxDataPtr = VtxData;
+				IdxDataPtr = IdxData;
+				return;
+			}
+#else
 			check( IdxDataPtr <= IdxDataEnd );
 			check( VtxDataPtr <= VtxDataEnd );
+#endif
 			if ( UseVAO )
+			{
+				glBindBuffer( GL_ARRAY_BUFFER, GLBuf );
 				glBufferSubData( GL_ARRAY_BUFFER, 0, ( (BYTE*)VtxDataPtr - (BYTE*)VtxData ), VtxData );
+#if PLATFORM_ANDROID
+				if( AndroidDoLog )
+					debugf( NAME_Log, TEXT("UT99_ANDROID_V197_GLES_FLUSH_AFTER_SUBDATA count=%i glerr=0x%04x"), AndroidFlushLogCount, (DWORD)glGetError() );
+#endif
+			}
+#if PLATFORM_ANDROID
+			if( AndroidDoLog )
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V197_GLES_FLUSH_DRAW count=%i mode=triangles indexElems=%i glerr=0x%04x"), AndroidFlushLogCount, IndexElems, (DWORD)glGetError() );
+#endif
 			glDrawElements( GL_TRIANGLES, IdxDataPtr - IdxData, GL_UNSIGNED_SHORT, IdxData );
+#if PLATFORM_ANDROID
+			if( AndroidDoLog )
+				debugf( NAME_Log, TEXT("UT99_ANDROID_V197_GLES_FLUSH_AFTER_DRAW count=%i glerr=0x%04x"), AndroidFlushLogCount, (DWORD)glGetError() );
+#endif
 			IdxCount = 0;
 		}
 		VtxDataPtr = VtxData;
